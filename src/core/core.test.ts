@@ -308,6 +308,52 @@ describe("セキ", () => {
   });
 });
 
+describe("セキ（大きな地を持つ外側の石）", () => {
+  // 左上の黒 (2,0)(2,1) と白 (4,0)(4,1) が (3,0)(3,1) を共有してセキ。
+  // セキに接している外側の白・黒の石は大きな地を持つので、その地は数える
+  const board = parseBoard(`
+    .ox.ox...
+    .ox.ox...
+    .ooox....
+    ...ox....
+    ...ox....
+    ...ox....
+    ...ox....
+    ...ox....
+    ...ox....
+  `);
+  const pos: Position = { board, trays: { [BLACK]: 0, [WHITE]: 0 } };
+
+  it("外側の石の地は数え、共有の呼吸点は数えない", () => {
+    // 白地: (0,0)(0,1)(0,2) と (0..2, 3..8) = 3 + 18 = 21
+    expect(score(pos, WHITE)).toBe(21);
+    // 黒地: (6..8, 0..1) 6 + (5..8, 2..8) 28 = 34
+    expect(score(pos, BLACK)).toBe(34);
+  });
+
+  it("1 目ずつの眼を持つセキでは、眼を地に数えない", () => {
+    // 黒 (眼 (0,0)) と白 (眼 (4,0)) が (2,0) を共有してセキ
+    const b = parseBoard(`
+      .x.o.ox..
+      xxxoooox.
+      oooxxxxx.
+      ..ox.....
+      ..ox.....
+      ..ox.....
+      ..ox.....
+      ..ox.....
+      ..ox.....
+    `);
+    const p: Position = { board: b, trays: { [BLACK]: 0, [WHITE]: 0 } };
+    const { regions, regionOf } = analyze(b);
+    expect(regions[regionOf[b.index(0, 0)]].territory).toBe(false);
+    expect(regions[regionOf[b.index(4, 0)]].territory).toBe(false);
+    // 外側の白地 (0..1, 3..8) = 12、外側の黒地 (7,0)(8,0)(8,1)(8,2) + (4..8, 3..8) = 4 + 30 = 34
+    expect(score(p, WHITE)).toBe(12);
+    expect(score(p, BLACK)).toBe(34);
+  });
+});
+
 describe("isRemovalDone", () => {
   const board = parseBoard(`
     ..O..xo..

@@ -52,24 +52,32 @@ export function analyze(board: Board): Analysis {
   return { regions, regionOf };
 }
 
+/** これ以上の大きさの地を持つグループは、セキではなく単独で生きているとみなす。 */
+const LARGE_EYE = 7;
+
 /**
- * セキの判定。中立の領域（両方の色に接する領域）に接している石の連は
- * セキの石とみなし、その連に接する領域は地に数えない。
+ * セキの判定（日本ルール: セキの石の眼は地に数えない）。
  *
- * ダメは開始時に自動で埋めるので、中立の領域が残るのはセキだけである。
+ * 1. 同じ色の地（その色だけに接する領域）を共有する連を、1 つのグループにまとめる。
+ * 2. 眼（そのグループの色の地）が 2 つ以上あるか、LARGE_EYE 目以上の地を持つグループは
+ *    単独で生きているとみなす。
+ * 3. 単独で生きておらず、中立の領域（両方の色に接する領域＝共有の呼吸点）に接している
+ *    グループをセキの石とし、その眼を地に数えない。
+ *
+ * 大きな地を持つ外側の石が共有の呼吸点に接していても、その地は数える。
+ * ダメは開始時に埋めてあるので、中立の領域が残るのは基本的にセキだけである。
  */
 function markSeki(board: Board, regions: Region[], regionOf: Int32Array): void {
   const total = board.size * board.size;
   const chainOf = new Int32Array(total).fill(-1);
-  const sekiChains: boolean[] = [];
-  const chainRegions: Set<number>[] = [];
+  const chains: { color: number; regions: Set<number>; touchesNeutral: boolean }[] = [];
 
   for (let start = 0; start < total; start++) {
     if (!board.isLiveStone(start) || chainOf[start] !== -1) continue;
-    const id = sekiChains.length;
+    const id = chains.length;
     const color = board.cells[start];
     const adjacent = new Set<number>();
-    let seki = false;
+    let touchesNeutral = false;
     const stack = [start];
     chainOf[start] = id;
     while (stack.length > 0) {
@@ -83,18 +91,41 @@ function markSeki(board: Board, regions: Region[], regionOf: Int32Array): void {
         } else {
           const r = regionOf[j];
           adjacent.add(r);
-          if (regions[r].owner === null) seki = true;
+          if (regions[r].owner === null) touchesNeutral = true;
         }
       }
     }
-    sekiChains.push(seki);
-    chainRegions.push(adjacent);
+    chains.push({ color, regions: adjacent, touchesNeutral });
   }
 
-  sekiChains.forEach((seki, id) => {
-    if (!seki) return;
-    for (const r of chainRegions[id]) regions[r].territory = false;
+  // 同じ色の地を共有する連をまとめる（union-find）
+  const parent = chains.map((_, k) => k);
+  const find = (k: number): number => (parent[k] === k ? k : (parent[k] = find(parent[k])));
+  const byEye = new Map<number, number>();
+  chains.forEach((chain, k) => {
+    for (const r of chain.regions) {
+      if (regions[r].owner !== chain.color) continue;
+      const other = byEye.get(r);
+      if (other === undefined) byEye.set(r, k);
+      else parent[find(k)] = find(other);
+    }
   });
+
+  const groups = new Map<number, { eyes: Set<number>; touchesNeutral: boolean }>();
+  chains.forEach((chain, k) => {
+    const root = find(k);
+    const group = groups.get(root) ?? { eyes: new Set<number>(), touchesNeutral: false };
+    for (const r of chain.regions) if (regions[r].owner === chain.color) group.eyes.add(r);
+    group.touchesNeutral ||= chain.touchesNeutral;
+    groups.set(root, group);
+  });
+
+  for (const group of groups.values()) {
+    if (!group.touchesNeutral) continue;
+    const independent = group.eyes.size >= 2 || [...group.eyes].some((r) => regions[r].points.length >= LARGE_EYE);
+    if (independent) continue;
+    for (const r of group.eyes) regions[r].territory = false;
+  }
 }
 
 /** 盤上の石とアゲハマトレイの状態。 */
