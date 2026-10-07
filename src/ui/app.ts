@@ -117,14 +117,23 @@ function replayGame(root: HTMLElement, game: GeneratedGame): Promise<void> {
   const view = new BoardView(game.size);
   const label = h("div", { class: "phase" }, []);
   const skip = h("button", {}, ["スキップ"]);
+  // アゲハマは対局と同じトレイに、取った分だけリアルタイムで並べる
+  const trays = { [BLACK]: trayElement(BLACK), [WHITE]: trayElement(WHITE) };
   root.replaceChildren(
     h("main", { class: "game" }, [
       h("div", { class: "board-wrap" }, [view.svg]),
-      h("aside", { class: "panel" }, [label, skip]),
+      h("aside", { class: "panel" }, [label, trays[WHITE].root, trays[BLACK].root, skip]),
     ]),
   );
   const go = new GoGame(game.size);
-  const show = () => view.render(new Board(game.size, go.cells.slice()), new Set(), []);
+  const show = () => {
+    view.render(new Board(game.size, go.cells.slice()), new Set(), []);
+    for (const color of [BLACK, WHITE] as const) {
+      trays[color].count.textContent = `${go.captures[color]} 個`;
+      trays[color].view.render(go.captures[color]);
+    }
+  };
+  show();
   return new Promise((resolve) => {
     const interval = REPLAY_MS / Math.max(1, game.moves.length);
     let k = 0;
@@ -253,9 +262,18 @@ function showGame(root: HTMLElement, settings: Settings, position: Position): vo
     ghost.style.display = stones.length === 0 ? "none" : "";
     if (stones.length === 0) return;
     ghost.style.transform = `translate(${pointer.x + 12}px, ${pointer.y + 12}px)`;
+    // 黒と白それぞれの個数を出す
     ghost.replaceChildren(
-      ...stones.slice(0, 5).map((s) => h("span", { class: `ghost-stone ${s.color === BLACK ? "black" : "white"}` }, [])),
-      h("span", { class: "ghost-count" }, [stones.length > 1 ? `×${stones.length}` : ""]),
+      ...([BLACK, WHITE] as const).flatMap((color) => {
+        const n = stones.filter((s) => s.color === color).length;
+        if (n === 0) return [];
+        return [
+          h("span", { class: "ghost-item" }, [
+            h("span", { class: `ghost-stone ${color === BLACK ? "black" : "white"}` }, []),
+            h("span", { class: "ghost-count" }, [`×${n}`]),
+          ]),
+        ];
+      }),
     );
   };
 
