@@ -510,6 +510,8 @@ function showGame(
     { value: "white", label: "白", checked: primaryColor === WHITE },
   ]);
   colorPicker.classList.add("compact");
+  // 右クリックの案内は、右クリックのない端末（スマートフォン）では出さない
+  colorPicker.querySelector("legend")!.replaceChildren("置く石", h("span", { class: "hint" }, ["（右クリックは反対の色）"]));
   colorPicker.addEventListener("change", (e) => {
     primaryColor = (e.target as HTMLInputElement).value === "white" ? WHITE : BLACK;
   });
@@ -518,15 +520,11 @@ function showGame(
   const trayOrder: Color[] = cpuMode ? [myColor, cpuColor] : [WHITE, BLACK];
   root.replaceChildren(
     h("main", { class: "game" }, [
-      h("div", { class: "board-wrap" }, [view.svg, toast, countdown]),
+      h("div", { class: "board-wrap" }, [view.svg, countdown]),
       h("aside", { class: "panel" }, [
-        phaseLabel,
-        timer,
-        penaltyLabel,
-        cpuStatus,
-        openLabel,
+        h("div", { class: "status" }, [phaseLabel, timer, penaltyLabel, cpuStatus, openLabel]),
         colorPicker,
-        ...trayOrder.map((c) => trays[c].root),
+        h("div", { class: "trays" }, trayOrder.map((c) => trays[c].root)),
         message,
         scoreForm,
         resultBox,
@@ -536,6 +534,8 @@ function showGame(
     ghost,
     cpuCursor,
     autoCursor,
+    // 案内は画面の下から出す（盤に重ねると操作の邪魔になる）
+    toast,
   );
 
   let drag: Drag = null;

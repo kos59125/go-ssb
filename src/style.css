@@ -381,20 +381,182 @@ button.primary {
   cursor: default;
 }
 
+.status,
+.trays {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/*
+ * スマートフォン: 対局中は 1 画面に収め、ページをスクロールさせない（引っ張って再読み込みしてしまうため）。
+ * 上から 状態（段階・タイム）→ 盤 → アゲハマ（2 つ横並び）→ 置く石 → 目数の入力とボタン。
+ * 盤は残りの高さに合わせて縮める。
+ */
 @media (max-width: 768px) {
+  html,
+  body {
+    overscroll-behavior: none;
+  }
+
+  body:has(.game:not(.finished)) {
+    overflow: hidden;
+  }
+
   .game {
     flex-direction: column;
     align-items: stretch;
-    padding: 8px 16px;
+    gap: 6px;
+    height: 100dvh;
+    box-sizing: border-box;
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+    overflow: hidden;
   }
 
-  .board-wrap {
-    width: 100%;
-    min-width: 0;
+  /* 終わったら結果を読めるようにスクロールを許す */
+  .game.finished {
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
   }
 
   .panel {
+    display: contents;
+  }
+
+  .status {
+    order: -1;
+    flex: none;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0 10px;
+    font-size: 12px;
+  }
+
+  .status .phase {
+    flex-basis: 100%;
+    font-size: 13px;
+  }
+
+  .status .timer {
+    font-size: 16px;
+  }
+
+  .status .penalty,
+  .status .message {
+    min-height: 0;
+  }
+
+  .status .note:empty,
+  .status .cpu-status:empty {
+    display: none;
+  }
+
+  .board-wrap {
+    flex: 1 1 auto;
+    min-height: 120px;
     width: 100%;
+    min-width: 0;
+    container-type: size;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+
+  /* 残りの幅と高さの小さい方に合わせた正方形 */
+  .board-wrap .board {
+    width: min(100cqw, 100cqh);
+    height: auto;
+  }
+
+  .game.finished .board-wrap {
+    flex: none;
+    height: min(calc(100vw - 16px), 70dvh);
+  }
+
+  .trays {
+    flex: none;
+    flex-direction: row;
+    gap: 6px;
+  }
+
+  .trays .tray {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 5px 6px;
+    gap: 4px;
+  }
+
+  .tray-title {
+    font-size: 11px;
+    gap: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  .tray-title .tray-stone {
+    width: 11px;
+    height: 11px;
+    flex: none;
+  }
+
+  .radio-group.compact {
+    flex: none;
+    align-items: center;
+    padding: 4px 10px;
+    font-size: 13px;
+  }
+
+  /* 見出しを横に並べて 1 行にする */
+  .radio-group.compact legend {
+    float: left;
+    padding: 0;
+    margin-right: 6px;
+  }
+
+  .radio-group.compact .hint {
+    display: none;
+  }
+
+  .message {
+    flex: none;
+    min-height: 0;
+    font-size: 13px;
+  }
+
+  .message:empty {
+    display: none;
+  }
+
+  .score-form {
+    flex: none;
+    gap: 6px;
+  }
+
+  .score-form .note {
+    display: none;
+  }
+
+  .score-inputs input {
+    width: 4em;
+  }
+
+  .score-form .buttons {
+    flex-wrap: nowrap;
+    gap: 6px;
+  }
+
+  .score-form .buttons button {
+    flex: 1 1 auto;
+    padding: 6px 4px;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+
+  /* シードは優先度が低いので、対局中は出さない（終わったら出す） */
+  .game:not(.finished) .seed-note {
+    display: none;
   }
 }
 
@@ -402,12 +564,19 @@ button.primary {
   position: relative;
 }
 
+/* 案内のトースト: 画面の下から出す（盤に重ねない）。PC では右の操作パネルの下に出す */
 .toast {
-  position: absolute;
-  left: 50%;
-  top: 12px;
-  transform: translateX(-50%);
-  max-width: calc(100% - 32px);
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  width: 268px;
+  box-sizing: border-box;
+  z-index: 20;
+  box-shadow: 0 2px 10px rgb(0 0 0 / 0.3);
+  transform: translateY(12px);
+  transition:
+    opacity 0.2s,
+    transform 0.2s;
   padding: 10px 16px;
   border-radius: 8px;
   background: rgb(43 38 32 / 0.92);
@@ -415,11 +584,20 @@ button.primary {
   font-size: 0.95em;
   pointer-events: none;
   opacity: 0;
-  transition: opacity 0.2s;
 }
 
 .toast.visible {
   opacity: 1;
+  transform: none;
+}
+
+@media (max-width: 768px) {
+  .toast {
+    left: 12px;
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    width: auto;
+  }
 }
 
 .tray-stones {
