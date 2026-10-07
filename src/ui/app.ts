@@ -336,7 +336,18 @@ function replayGame(root: HTMLElement, game: GeneratedGame): Promise<void> {
  * - tray: アゲハマトレイで押した
  */
 type Drag =
-  | { kind: "board"; start: number; current: number; dropping: boolean; button: number }
+  | {
+      kind: "board";
+      start: number;
+      current: number;
+      /** 石を持って空点を押した（離した点、またはなぞった点に置く）。 */
+      dropping: boolean;
+      button: number;
+      /** なぞって置いている途中か（押した点から別の点へ動かした）。 */
+      swiping?: boolean;
+      /** なぞって最後に通った点。 */
+      last?: number;
+    }
   | { kind: "tray"; owner: Color; start: number; current: number; button: number }
   | null;
 
@@ -602,12 +613,34 @@ function showGame(
     });
   }
 
+  /** なぞって置く: 通った空点に、持っている石を 1 個ずつ置く（石のある点は飛ばす）。 */
+  const swipeTo = (to: number) => {
+    if (drag?.kind !== "board") return;
+    const color = colorFor(drag.button);
+    const before = session.penalties;
+    const from = drag.last ?? drag.start;
+    // 速く動かしたときに飛ばした点も通ったことにする
+    const path = drag.swiping ? linePoints(settings.size, from, to).slice(1) : linePoints(settings.size, from, to);
+    drag.swiping = true;
+    for (const i of path) {
+      if (!session.hand) break;
+      if (session.board.cells[i] === EMPTY) session.placeAt(i, color);
+    }
+    drag.last = to;
+    penaltyCheck(before);
+    render();
+  };
+
   // --- 動かす ---
   const onMove = (e: PointerEvent) => {
     pointer = { x: e.clientX, y: e.clientY };
     if (drag?.kind === "board") {
       const i = view.pointAt(e.clientX, e.clientY);
       if (i !== null) drag.current = i;
+      // 石を持って空点を押したまま別の点へ動かすと、なぞった点に置いていく
+      if (drag.dropping && session.hand && session.phase === "arrange" && i !== null && i !== (drag.last ?? drag.start)) {
+        swipeTo(i);
+      }
       if (!drag.dropping && drag.current !== drag.start) view.showSelection(drag.start, drag.current);
     } else if (drag?.kind === "tray" && drag.start >= 0) {
       const cell = trays[drag.owner].view.cellAt(e.clientX, e.clientY);
@@ -627,7 +660,10 @@ function showGame(
 
     if (drag.kind === "board") {
       view.showSelection(null, null);
-      if (!drag.dropping && drag.current !== drag.start) {
+      if (drag.swiping) {
+        // なぞって置いた後: トレイの上で離したら、残りの石を入れる
+        if (tray !== null && session.hand) dropToTray(tray);
+      } else if (!drag.dropping && drag.current !== drag.start) {
         // 範囲選択（押した点が空点でも石でもよい）。持っている石に追加する
         pickUp(pointsInRect(settings.size, drag.start, drag.current));
       } else if (i === drag.start) {
@@ -1092,6 +1128,31 @@ function trayElement(owner: Color, who?: string) {
     view.svg,
   ]);
   return { root, count, view };
+}
+
+/** 2 点を結ぶ線上の点（両端を含む、ブレゼンハムの方法）。 */
+function linePoints(size: number, a: number, b: number): number[] {
+  let [x, y] = [a % size, Math.floor(a / size)];
+  const [x2, y2] = [b % size, Math.floor(b / size)];
+  const dx = Math.abs(x2 - x);
+  const dy = -Math.abs(y2 - y);
+  const sx = x < x2 ? 1 : -1;
+  const sy = y < y2 ? 1 : -1;
+  let err = dx + dy;
+  const points = [y * size + x];
+  while (x !== x2 || y !== y2) {
+    const e2 = 2 * err;
+    if (e2 >= dy) {
+      err += dy;
+      x += sx;
+    }
+    if (e2 <= dx) {
+      err += dx;
+      y += sy;
+    }
+    points.push(y * size + x);
+  }
+  return points;
 }
 
 function pointsInRect(size: number, a: number, b: number): number[] {
