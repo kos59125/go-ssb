@@ -8,11 +8,14 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 export class BoardView {
   readonly svg: SVGSVGElement;
   private readonly size: number;
+  /** 盤を 180° 回転して表示するか（対戦で白を持つとき。仕様書 §4）。 */
+  private readonly rotated: boolean;
   private readonly stoneLayer: SVGGElement;
   private readonly overlay: SVGGElement;
 
-  constructor(size: number) {
+  constructor(size: number, rotated = false) {
     this.size = size;
+    this.rotated = rotated;
     const extent = MARGIN * 2 + CELL * (size - 1);
     this.svg = el("svg", { viewBox: `0 0 ${extent} ${extent}`, class: "board" });
     this.svg.append(el("rect", { x: 0, y: 0, width: extent, height: extent, class: "board-bg" }));
@@ -41,7 +44,7 @@ export class BoardView {
   render(board: Board, marks: Set<number>, origin: number[], errors: Set<number> = new Set()): void {
     this.stoneLayer.replaceChildren();
     for (let i = 0; i < board.cells.length; i++) {
-      const { x, y } = board.point(i);
+      const { x, y } = board.point(this.display(i));
       const cx = MARGIN + x * CELL;
       const cy = MARGIN + y * CELL;
       if (board.cells[i] !== EMPTY) {
@@ -70,6 +73,7 @@ export class BoardView {
   showSelection(a: number | null, b: number | null): void {
     this.overlay.replaceChildren();
     if (a === null || b === null) return;
+    [a, b] = [this.display(a), this.display(b)];
     const [x1, y1] = [a % this.size, Math.floor(a / this.size)];
     const [x2, y2] = [b % this.size, Math.floor(b / this.size)];
     const left = MARGIN + (Math.min(x1, x2) - 0.5) * CELL;
@@ -84,8 +88,9 @@ export class BoardView {
     const rect = this.svg.getBoundingClientRect();
     const extent = MARGIN * 2 + CELL * (this.size - 1);
     const scale = rect.width / extent;
-    const x = i % this.size;
-    const y = Math.floor(i / this.size);
+    const d = this.display(i);
+    const x = d % this.size;
+    const y = Math.floor(d / this.size);
     return { x: (MARGIN + x * CELL) * scale, y: (MARGIN + y * CELL) * scale, r: CELL * 0.47 * scale };
   }
 
@@ -97,7 +102,12 @@ export class BoardView {
     const x = Math.round(((clientX - rect.left) * scale - MARGIN) / CELL);
     const y = Math.round(((clientY - rect.top) * scale - MARGIN) / CELL);
     if (x < 0 || y < 0 || x >= this.size || y >= this.size) return null;
-    return y * this.size + x;
+    return this.display(y * this.size + x);
+  }
+
+  /** 盤の点と表示上の点の対応（180° 回転は自分自身が逆変換）。 */
+  private display(i: number): number {
+    return this.rotated ? this.size * this.size - 1 - i : i;
   }
 }
 

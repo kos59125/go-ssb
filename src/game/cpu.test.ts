@@ -66,4 +66,15 @@ describe("Cpu", () => {
     expect(cpuPlayer.phase).toBe("finished");
     expect(cpuPlayer.penalties).toBe(0);
   });
+
+  it("担当外の石を制限する設定では、相手の色の石と自分のトレイしか使えない", () => {
+    const { human } = setup(BLACK);
+    // 人（黒）は白地を整地する: 黒石は持てない、白石は持てる
+    expect(human.canPick(0 * 11 + 6)).toBe(false); // 黒石 (6,0)
+    expect(human.canPick(6 * 11 + 5)).toBe(true); // 白石 (5,6)
+    expect(human.canUseTray(BLACK)).toBe(true);
+    expect(human.canUseTray(WHITE)).toBe(false);
+    // 自分の地（黒地、CPU が整地する）には置けない
+    expect(human.canPlace(0)).toBe(false);
+  });
 });

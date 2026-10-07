@@ -22,7 +22,10 @@ npm run build      # 型チェックとビルド（dist/）
 | `src/core/analysis.ts` | 領域・地・セキの判定と目数計算 |
 | `src/core/shapes.ts` | 区間の形の判定（10 の倍数・余り） |
 | `src/core/judge.ts` | 整地完了と死に石取りフェーズの判定 |
-| `src/game/session.ts` | ひとりでモードのゲーム進行（フェーズ・ペナルティ・完了判定） |
+| `src/game/match.ts` | 盤を共有するゲーム進行（Match）とプレイヤー（Player）: フェーズ・ペナルティ・完了判定 |
+| `src/game/session.ts` | ひとりでモード（黒地・白地の両方を担当する Player） |
+| `src/game/layout.ts` | 地の完成形の探索（CPU 用） |
+| `src/game/cpu.ts` | vs CPU の CPU |
 | `src/game/dummy.ts` | 仮の終局図生成（`?dummy=123` での動作確認用） |
 | `src/core/random.ts` | シード付き乱数 |
 | `src/ai/go.ts` | 自動対局用の囲碁ルール（取り・コウ・自殺手） |

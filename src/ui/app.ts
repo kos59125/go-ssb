@@ -2,15 +2,25 @@ import { GameGenerator } from "../ai/client";
 import { GeneratedGame } from "../ai/generate";
 import { GoGame } from "../ai/go";
 import { GameRecord, parseSgf } from "../ai/sgf";
-import { Position } from "../core/analysis";
+import { Position, analyze } from "../core/analysis";
 import { BLACK, Board, Color, EMPTY, WHITE, opponent } from "../core/board";
 import { randomSeed, seedNumber } from "../core/random";
 import { dummyPosition } from "../game/dummy";
+import { CPU_INTERVAL, Cpu, CpuAction, CpuLevel } from "../game/cpu";
+import { planLayouts, SerializedLayout } from "../game/layout";
+import { Match, Player } from "../game/match";
 import { PENALTY_MS, Session } from "../game/session";
 import { BoardView } from "./boardView";
 import { TrayView } from "./trayView";
 
 interface Settings {
+  /** ひとりで / vs CPU（仕様書 §3）。 */
+  mode: "solo" | "cpu";
+  /** vs CPU で自分が持つ石の色。相手の地を整地する。 */
+  myColor: Color;
+  cpuLevel: CpuLevel;
+  /** vs CPU で、担当外の石を操作できないようにするか。 */
+  restricted: boolean;
   size: number;
   undoOnPenalty: boolean;
   /** 開始時に初手から棋譜を並べるか（仕様書 §5.1）。 */
@@ -47,7 +57,26 @@ function showSettings(root: HTMLElement, settings: Settings): void {
   root.replaceChildren(
     h("main", { class: "settings" }, [
       h("h1", {}, ["囲碁スピード整地バトル"]),
-      h("p", { class: "lead" }, ["ひとりで：黒地と白地を両方整地して、タイムを競います。"]),
+      radioGroup("モード", "mode", [
+        { value: "solo", label: "ひとりで", checked: settings.mode === "solo" },
+        { value: "cpu", label: "vs CPU", checked: settings.mode === "cpu" },
+      ]),
+      h("p", { class: "lead", id: "mode-lead" }, []),
+      h("div", { class: "cpu-settings" }, [
+        radioGroup("自分の石", "my-color", [
+          { value: "black", label: "黒（白地を整地）", checked: settings.myColor === BLACK },
+          { value: "white", label: "白（黒地を整地）", checked: settings.myColor === WHITE },
+        ]),
+        radioGroup("CPU の強さ", "cpu-level", [
+          { value: "easy", label: "やさしい", checked: settings.cpuLevel === "easy" },
+          { value: "normal", label: "ふつう", checked: settings.cpuLevel === "normal" },
+          { value: "hard", label: "つよい", checked: settings.cpuLevel === "hard" },
+        ]),
+        radioGroup("担当外の石の操作", "restricted", [
+          { value: "on", label: "制限あり", checked: settings.restricted },
+          { value: "off", label: "制限なし", checked: !settings.restricted },
+        ]),
+      ]),
       radioGroup("終局図", "source", [
         { value: "katago", label: "KataGo で作る", checked: !settings.record },
         { value: "sgf", label: "SGF を読み込む", checked: !!settings.record },
@@ -87,6 +116,19 @@ function showSettings(root: HTMLElement, settings: Settings): void {
   const sgfInfo = root.querySelector<HTMLParagraphElement>("#sgf-info")!;
   const startButton = root.querySelector<HTMLButtonElement>("#start-button")!;
   let record = settings.record;
+  const isCpu = () => selected("mode") === "cpu";
+  const updateMode = () => {
+    root.querySelector<HTMLElement>(".cpu-settings")!.hidden = !isCpu();
+    root.querySelector("#mode-lead")!.textContent = isCpu()
+      ? "vs CPU：相手の地を整地します。ペナルティ込みのタイムが短い方が勝ちです。"
+      : "ひとりで：黒地と白地を両方整地して、タイムを競います。";
+  };
+  for (const input of root.querySelectorAll<HTMLInputElement>('input[name="mode"]')) {
+    input.addEventListener("change", () => {
+      updateMode();
+      prefetch();
+    });
+  }
   // SGF のときは、盤のサイズとシードは棋譜で決まるので選べない
   const updateSource = () => {
     const sgf = selected("source") === "sgf";
@@ -116,9 +158,12 @@ function showSettings(root: HTMLElement, settings: Settings): void {
   });
   updateSource();
   // 設定を選んでいる間に、裏で終局図を作っておく
-  const prefetch = () => {
-    if (!dummySeed() && seedInput.value.trim()) generator.prefetch(Number(selected("size")), seedNumber(seedInput.value));
-  };
+  function prefetch() {
+    if (!dummySeed() && seedInput.value.trim()) {
+      generator.prefetch(Number(selected("size")), seedNumber(seedInput.value), isCpu());
+    }
+  }
+  updateMode();
   prefetch();
   for (const input of root.querySelectorAll<HTMLInputElement>('input[name="size"]')) {
     input.addEventListener("change", prefetch);
@@ -136,6 +181,10 @@ function showSettings(root: HTMLElement, settings: Settings): void {
     window.clearTimeout(seedTimer);
     const sgf = selected("source") === "sgf" ? record : undefined;
     const next: Settings = {
+      mode: isCpu() ? "cpu" : "solo",
+      myColor: selected("my-color") === "white" ? WHITE : BLACK,
+      cpuLevel: selected("cpu-level") as CpuLevel,
+      restricted: selected("restricted") === "on",
       size: Number(selected("size")),
       undoOnPenalty: selected("undo") === "undo",
       replay: selected("start") === "replay",
@@ -153,10 +202,12 @@ async function prepareGame(root: HTMLElement, settings: Settings): Promise<void>
   const nextSeed = randomSeed();
   const dummy = dummySeed();
   if (dummy) {
-    showGame(root, settings, dummyPosition(settings.size, dummy), nextSeed);
+    const position = dummyPosition(settings.size, dummy);
+    showGame(root, settings, position, nextSeed, planLayouts(position));
     return;
   }
 
+  const forCpu = settings.mode === "cpu";
   const status = h("p", { class: "lead" }, [
     settings.record ? "棋譜を読み込んで、死に石を判定しています…" : "ネットワークを読み込んでいます…",
   ]);
@@ -173,20 +224,28 @@ async function prepareGame(root: HTMLElement, settings: Settings): Promise<void>
   let game: GeneratedGame;
   try {
     game = settings.record
-      ? await generator.fromRecord(settings.record)
-      : await generator.take(settings.size, seed, false, (move) => (status.textContent = `自動対局中… ${move} 手目`));
+      ? await generator.fromRecord(settings.record, forCpu)
+      : await generator.take(settings.size, seed, forCpu, (move) => (status.textContent = `自動対局中… ${move} 手目`));
   } catch (err) {
     if (cancelled) return;
     status.textContent = `終局図を生成できませんでした（${err instanceof Error ? err.message : err}）。`;
     const fallback = h("button", { class: "primary" }, ["仮の局面で遊ぶ"]);
-    fallback.addEventListener("click", () => showGame(root, settings, dummyPosition(settings.size, seed), nextSeed));
+    fallback.addEventListener("click", () => {
+      const position = dummyPosition(settings.size, seed);
+      showGame(root, settings, position, nextSeed, planLayouts(position));
+    });
     status.after(fallback);
     return;
   }
   if (cancelled) return;
-  generator.prefetch(settings.size, seedNumber(nextSeed));
+  // 実戦の棋譜は作り直せないので、CPU が整地できる形が見つからなければ vs CPU では遊べない
+  if (forCpu && !game.layouts?.[settings.myColor]) {
+    status.textContent = "この棋譜は、CPU が整地できる形が見つかりませんでした。ひとりでモードで遊んでください。";
+    return;
+  }
+  if (!settings.record) generator.prefetch(settings.size, seedNumber(nextSeed), forCpu);
   if (settings.replay) await replayGame(root, game);
-  showGame(root, settings, game.position, nextSeed);
+  showGame(root, settings, game.position, nextSeed, game.layouts);
 }
 
 /** 棋譜を REPLAY_MS かけて並べる。 */
@@ -243,16 +302,43 @@ type Drag =
   | { kind: "tray"; owner: Color; start: number; current: number; button: number }
   | null;
 
-/** nextSeed: 「もう一度」と「設定に戻る」で使う次のシード。 */
-function showGame(root: HTMLElement, settings: Settings, position: Position, nextSeed: string): void {
-  const session = new Session(position, { undoOnPenalty: settings.undoOnPenalty });
-  const view = new BoardView(settings.size);
+/**
+ * 整地の画面（ひとりで / vs CPU）。
+ * @param nextSeed 「もう一度」と「設定に戻る」で使う次のシード
+ * @param layouts vs CPU 用の整地の形（CPU が使う）
+ */
+function showGame(
+  root: HTMLElement,
+  settings: Settings,
+  position: Position,
+  nextSeed: string,
+  layouts?: Record<Color, SerializedLayout | null>,
+): void {
+  const cpuMode = settings.mode === "cpu";
+  const myColor = settings.myColor;
+  const cpuColor = opponent(myColor);
+  let session: Player;
+  let cpu: Cpu | null = null;
+  if (cpuMode) {
+    const match = new Match(position, { undoOnPenalty: settings.undoOnPenalty });
+    session = new Player(match, { color: myColor, restricted: settings.restricted });
+    // CPU は人の地（myColor の地）を整地する
+    cpu = new Cpu(new Player(match, { color: cpuColor }), layouts?.[myColor] ?? null);
+  } else {
+    session = new Session(position, { undoOnPenalty: settings.undoOnPenalty });
+  }
+  const cpuPlayer = cpu?.player ?? null;
+  // 自分が白なら盤を 180° 回して表示する（仕様書 §4）
+  const view = new BoardView(settings.size, cpuMode && myColor === WHITE);
+  const colorName = (c: Color) => (c === BLACK ? "黒" : "白");
 
   const phaseLabel = h("div", { class: "phase" }, []);
   const timer = h("div", { class: "timer" }, []);
   const penaltyLabel = h("div", { class: "penalty" }, []);
   const openLabel = h("div", { class: "note" }, []);
   const message = h("div", { class: "message" }, []);
+  const cpuStatus = h("div", { class: "cpu-status" }, []);
+  cpuStatus.hidden = !cpuMode;
   // 盤の上に出す目立つ案内（操作できなかった理由など）
   const toast = h("div", { class: "toast" }, []);
   // 開始のカウントダウン（仕様書 §2.7）。合図までは操作できない
@@ -261,18 +347,24 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
     h("div", { class: "countdown-spinner" }, [h("div", { class: "countdown-ring" }, []), countdownNumber]),
   ]);
   const ghost = h("div", { class: "ghost" }, []);
-  const trays = { [BLACK]: trayElement(BLACK), [WHITE]: trayElement(WHITE) };
+  // CPU のカーソル（vs CPU では常に表示する）
+  const cpuCursor = h("div", { class: "cpu-cursor" }, [h("span", { class: "cpu-cursor-label" }, ["CPU"])]);
+  cpuCursor.hidden = !cpuMode;
+  const trays = {
+    [BLACK]: trayElement(BLACK, cpuMode ? (myColor === BLACK ? "あなた" : "CPU") : undefined),
+    [WHITE]: trayElement(WHITE, cpuMode ? (myColor === WHITE ? "あなた" : "CPU") : undefined),
+  };
+  if (cpuMode) trays[cpuColor].root.classList.add("readonly");
   const quitButton = h("button", { type: "button" }, ["やめる"]);
   // ひとりでモード: 終局図からやり直す（タイマーとペナルティは続く）
   const resetButton = h("button", { type: "button" }, ["最初からやり直す"]);
-  // 目数の入力欄は最初から出しておく（仕様書 §2.6）
+  resetButton.hidden = cpuMode;
+  // 目数の入力欄は最初から出しておく（仕様書 §2.6）。vs CPU では担当の地だけ
   const blackInput = h("input", { type: "number", step: "1", required: "", inputmode: "numeric" }, []);
   const whiteInput = h("input", { type: "number", step: "1", required: "", inputmode: "numeric" }, []);
+  const inputs = { [BLACK]: blackInput, [WHITE]: whiteInput };
   const scoreForm = h("form", { class: "score-form" }, [
-    h("div", { class: "score-inputs" }, [
-      h("label", {}, ["黒地", blackInput, "目"]),
-      h("label", {}, ["白地", whiteInput, "目"]),
-    ]),
+    h("div", { class: "score-inputs" }, session.assigned.map((c) => h("label", {}, [`${colorName(c)}地`, inputs[c], "目"]))),
     h("p", { class: "note" }, ["アゲハマが地より多いときはマイナスで入力します。"]),
     h("div", { class: "buttons" }, [h("button", { class: "primary" }, ["完了"]), resetButton, quitButton]),
   ]);
@@ -283,10 +375,10 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
   resultBox.hidden = true;
 
   // 左クリック（タップ）で置く石の色。右クリックでは反対の色を置く
-  let primaryColor: Color = BLACK;
+  let primaryColor: Color = cpuMode ? cpuColor : BLACK;
   const colorPicker = radioGroup("置く石（右クリックは反対の色）", "place-color", [
-    { value: "black", label: "黒", checked: true },
-    { value: "white", label: "白", checked: false },
+    { value: "black", label: "黒", checked: primaryColor === BLACK },
+    { value: "white", label: "白", checked: primaryColor === WHITE },
   ]);
   colorPicker.classList.add("compact");
   colorPicker.addEventListener("change", (e) => {
@@ -294,6 +386,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
   });
   const colorFor = (button: number): Color => (button === 2 ? opponent(primaryColor) : primaryColor);
 
+  const trayOrder: Color[] = cpuMode ? [myColor, cpuColor] : [WHITE, BLACK];
   root.replaceChildren(
     h("main", { class: "game" }, [
       h("div", { class: "board-wrap" }, [view.svg, toast, countdown]),
@@ -301,10 +394,10 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
         phaseLabel,
         timer,
         penaltyLabel,
+        cpuStatus,
         openLabel,
         colorPicker,
-        trays[WHITE].root,
-        trays[BLACK].root,
+        ...trayOrder.map((c) => trays[c].root),
         message,
         scoreForm,
         resultBox,
@@ -312,6 +405,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
       ]),
     ]),
     ghost,
+    cpuCursor,
   );
 
   let drag: Drag = null;
@@ -321,6 +415,8 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
   let errorMarks = new Set<number>();
   let messageTimer = 0;
   let toastTimer = 0;
+  // 人の操作を受け付けるか（完了した後や、勝敗が決まった後は受け付けない）
+  let accepting = true;
 
   const flash = (text: string) => {
     message.textContent = text;
@@ -337,15 +433,33 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
 
   const render = () => {
     view.render(session.board, session.marks, session.hand?.origins ?? [], errorMarks);
-    phaseLabel.textContent =
-      session.phase === "removal"
-        ? `① 死に石取り：死に石をアゲハマトレイへ（残り ${countDeadStones(session)} 個）`
+    if (session.phase !== "finished") {
+      const removal = cpuMode
+        ? `① 死に石取り：自分の地（${colorName(myColor)}地）の中の死に石をアゲハマへ（残り ${countDeadStones(session)} 個）`
+        : `① 死に石取り：死に石をアゲハマトレイへ（残り ${countDeadStones(session)} 個）`;
+      const arrange = cpuMode
+        ? `② 整地：${colorName(cpuColor)}地にアゲハマを埋めて整える`
         : "② 整地：アゲハマを埋めて地を整える";
+      phaseLabel.textContent = session.phase === "removal" ? removal : arrange;
+    }
     penaltyLabel.textContent = `ペナルティ ${session.penalties} 回（+${(session.penalties * PENALTY_MS) / 1000} 秒）`;
     openLabel.textContent = session.phase === "arrange" && session.boundaryOpen ? "境界が開いています（閉じた時点で目数を判定します）" : "";
     for (const color of [BLACK, WHITE] as const) {
       trays[color].view.render(session.position.trays[color]);
     }
+    if (cpuPlayer) {
+      const state =
+        cpuPlayer.phase === "finished"
+          ? `完了 ${formatTime(cpuPlayer.elapsed())}`
+          : cpuPlayer.phase === "removal"
+            ? "死に石取り中"
+            : cpuWaiting
+              ? "待機中"
+              : `${colorName(myColor)}地を整地中`;
+      cpuStatus.textContent = `CPU（${colorName(cpuColor)}）: ${state}`;
+    }
+    // 石を持っているときは grabbing、持っていないときは grab のカーソル
+    document.body.classList.toggle("holding", !!session.hand);
     renderGhost();
   };
 
@@ -373,11 +487,15 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
     if (session.penalties > before) flash(`ペナルティ！ +${PENALTY_MS / 1000} 秒`);
   };
 
-  /** 持っている石を 1 個置く。死に石取りの間は置けないので、石を元に戻して理由を伝える。 */
+  /** 持っている石を 1 個置く。置けなかった理由を伝える。 */
   const place = (i: number, color: Color) => {
-    if (session.placeAt(i, color) || session.phase !== "removal") return;
-    session.cancel();
-    notice("死に石取りの間は、盤上で石を動かせません。死に石をアゲハマトレイに移すと整地に進めます。");
+    if (session.placeAt(i, color)) return;
+    if (session.phase === "removal") {
+      session.cancel();
+      notice("死に石取りの間は、盤上で石を動かせません。死に石をアゲハマトレイに移すと整地に進めます。");
+    } else if (!session.canPlace(i)) {
+      notice("担当外の地には置けません（設定で制限しています）。");
+    }
   };
 
   const pickFromTray = (owner: Color, count: number) => {
@@ -389,6 +507,10 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
   };
 
   const dropToTray = (owner: Color) => {
+    if (!session.canUseTray(owner)) {
+      notice("CPU のアゲハマは使えません。");
+      return;
+    }
     if (!session.hand || session.dropToTray(owner)) return;
     const fits = session.hand.stones.some((s) => s.color === opponent(owner));
     if (!fits) {
@@ -398,9 +520,15 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
     }
   };
 
+  const pickUp = (points: number[]) => {
+    if (!session.pickUp(points) && session.restricted && points.some((i) => session.board.cells[i] !== EMPTY)) {
+      notice(`担当外の石は動かせません（設定で制限しています）。動かせるのは${colorName(cpuColor)}石だけです。`);
+    }
+  };
+
   // --- 押す ---
   view.svg.addEventListener("pointerdown", (e) => {
-    if (!session.started || (e.button !== 0 && e.button !== 2)) return;
+    if (!accepting || !session.started || (e.button !== 0 && e.button !== 2)) return;
     errorMarks = new Set();
     const i = view.pointAt(e.clientX, e.clientY);
     if (i === null) return;
@@ -413,7 +541,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
   for (const owner of [BLACK, WHITE] as const) {
     const tray = trays[owner];
     tray.root.addEventListener("pointerdown", (e) => {
-      if (!session.started || (e.button !== 0 && e.button !== 2)) return;
+      if (!accepting || !session.started || (e.button !== 0 && e.button !== 2)) return;
       errorMarks = new Set();
       pointer = { x: e.clientX, y: e.clientY };
       const cell = tray.view.cellAt(e.clientX, e.clientY) ?? -1;
@@ -449,14 +577,16 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
       view.showSelection(null, null);
       if (!drag.dropping && drag.current !== drag.start) {
         // 範囲選択（押した点が空点でも石でもよい）。持っている石に追加する
-        session.pickUp(pointsInRect(settings.size, drag.start, drag.current));
+        pickUp(pointsInRect(settings.size, drag.start, drag.current));
       } else if (i === drag.start) {
         // 死に石取りの間は、クリックした石をそのままアゲハマトレイへ
         if (session.board.cells[i] !== EMPTY) {
-          if (session.phase === "removal") session.capture(i);
-          else session.pickUp([i]);
-        }
-        else if (session.hand) place(i, color);
+          if (session.phase === "removal") {
+            if (!session.capture(i) && cpuMode && session.board.cells[i] === myColor) {
+              notice(`死に石取りで取るのは、自分の地の中の${colorName(cpuColor)}の死に石です。`);
+            }
+          } else pickUp([i]);
+        } else if (session.hand) place(i, color);
       } else if (tray !== null) {
         dropToTray(tray);
       } else if (i !== null && session.board.cells[i] === EMPTY && session.hand) {
@@ -464,12 +594,14 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
       }
     } else {
       const { owner, start } = drag;
-      const view = trays[owner].view;
+      const trayView = trays[owner].view;
       const count = session.position.trays[owner];
-      view.showSelection(null, null);
-      if (tray === owner && start >= 0 && drag.current !== start) {
+      trayView.showSelection(null, null);
+      if (!session.canUseTray(owner)) {
+        notice("CPU のアゲハマは使えません。");
+      } else if (tray === owner && start >= 0 && drag.current !== start) {
         // トレイの中で範囲選択
-        const n = view.countInRect(start, drag.current, count);
+        const n = trayView.countInRect(start, drag.current, count);
         if (n > 0) pickFromTray(owner, n);
       } else if (tray === owner) {
         // 石をクリックすると持つ（死に石取りの間は持っている石を入れる）。空いた所なら持っている石を入れる
@@ -541,22 +673,42 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
   document.addEventListener("keydown", onKey);
   document.addEventListener("contextmenu", onContextMenu);
   const updateTimer = () => (timer.textContent = formatTime(session.elapsed()));
-  const tick = window.setInterval(updateTimer, 100);
+  const tick = window.setInterval(() => {
+    updateTimer();
+    if (cpuMode) {
+      render();
+      decide();
+    }
+  }, 100);
   updateTimer();
 
-  const cleanup = () => {
-    for (const f of cleanups) f();
+  /** 人の操作を止める（完了したとき、勝敗が決まったとき）。 */
+  const stopInput = () => {
+    accepting = false;
+    drag = null;
     document.removeEventListener("pointermove", onMove);
     document.removeEventListener("pointerup", onUp);
     document.removeEventListener("keydown", onKey);
+    document.body.classList.remove("holding");
+  };
+
+  const cleanup = () => {
+    for (const f of cleanups) f();
+    stopInput();
     document.removeEventListener("contextmenu", onContextMenu);
     window.clearInterval(tick);
     window.clearTimeout(messageTimer);
     window.clearTimeout(toastTimer);
   };
 
+  /** 画面を離れる。 */
+  const leave = () => {
+    cleanup();
+    cpuCursor.remove();
+  };
+
   resetButton.addEventListener("click", () => {
-    if (!session.started) return;
+    if (!session.started || !(session instanceof Session)) return;
     if (!window.confirm("終局図からやり直しますか？（タイマーとペナルティはそのまま続きます）")) return;
     session.reset();
     errorMarks = new Set();
@@ -566,16 +718,18 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
   });
 
   quitButton.addEventListener("click", () => {
-    cleanup();
+    leave();
     showSettings(root, { ...settings, seed: nextSeed });
   });
 
   scoreForm.addEventListener("submit", (e) => {
     e.preventDefault();
-    if (!session.started) return;
-    const result = session.complete({ [BLACK]: Number(blackInput.value), [WHITE]: Number(whiteInput.value) });
+    if (!session.started || !accepting) return;
+    const answer: Partial<Record<Color, number>> = {};
+    for (const c of session.assigned) answer[c] = Number(inputs[c].value);
+    const result = session.complete(answer);
     if (result.ok) {
-      finish();
+      humanFinished();
       return;
     }
     flash(`まだ完了していません（+${PENALTY_MS / 1000} 秒）`);
@@ -583,9 +737,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
     // 誤りの場所に×を付ける
     errorMarks = new Set(result.errorPoints);
     // 目数が違う入力欄を強調する
-    for (const [color, input] of [[BLACK, blackInput], [WHITE, whiteInput]] as const) {
-      input.classList.toggle("wrong", result.wrongAnswers.includes(color));
-    }
+    for (const c of [BLACK, WHITE] as const) inputs[c].classList.toggle("wrong", result.wrongAnswers.includes(c));
     // 場所で示せない誤りは文章で伝える
     if (result.errorPoints.length === 0) {
       const other = result.problems.filter((p) => !p.endsWith("の目数が違う"));
@@ -594,36 +746,124 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
     render();
   });
 
-  /** 整地完了: 画面はそのままで、操作を止めて結果をパネルに出す。 */
-  const finish = () => {
-    cleanup();
-    updateTimer();
-    render();
-    phaseLabel.textContent = "整地完了！";
-    openLabel.textContent = "";
-    message.textContent = "";
-    root.querySelector(".game")!.classList.add("finished");
-    const time = session.elapsed();
-    const best = loadBest(settings.size);
-    const isBest = best === null || time < best;
-    if (isBest) saveBest(settings.size, time);
-    const again = h("button", { class: "primary" }, ["もう一度"]);
-    const back = h("button", {}, ["設定に戻る"]);
-    // 棋譜で遊んだときの「もう一度」は同じ棋譜で、KataGo のときは新しいシードで遊ぶ
-    again.addEventListener("click", () => void prepareGame(root, { ...settings, seed: nextSeed }));
-    back.addEventListener("click", () => showSettings(root, { ...settings, seed: nextSeed }));
+  /** 人が整地を完了した。ひとりでモードならそのまま終了、vs CPU なら勝敗が決まるまで待つ。 */
+  const humanFinished = () => {
+    stopInput();
     for (const input of [blackInput, whiteInput]) input.disabled = true;
     scoreForm.querySelector(".buttons")!.remove();
     colorPicker.hidden = true;
+    message.textContent = "";
+    openLabel.textContent = "";
+    if (!cpuMode) {
+      endGame();
+      return;
+    }
+    phaseLabel.textContent = "整地完了！ CPU の完了を待っています…";
+    decide();
+  };
+
+  /**
+   * vs CPU の勝敗（ペナルティ込みのタイムが短い方の勝ち）。両方が完了したとき、
+   * または先に完了した側のタイムを、もう一方の経過時間が超えた時点で決まる。
+   */
+  let decided = false;
+  const decide = () => {
+    if (!cpuPlayer || decided || !session.started) return;
+    const me = session.phase === "finished" ? session.elapsed() : null;
+    const them = cpuPlayer.phase === "finished" ? cpuPlayer.elapsed() : null;
+    let winner: "me" | "cpu" | null = null;
+    if (me !== null && them !== null) winner = me <= them ? "me" : "cpu";
+    else if (me !== null && cpuPlayer.elapsed() > me) winner = "me";
+    else if (them !== null && session.elapsed() > them) winner = "cpu";
+    if (!winner) return;
+    decided = true;
+    endGame(winner);
+  };
+
+  /** 終了: 画面はそのままで、操作を止めて結果をパネルに出す。 */
+  const endGame = (winner?: "me" | "cpu") => {
+    cleanup();
+    updateTimer();
+    render();
+    root.querySelector(".game")!.classList.add("finished");
+    const again = h("button", { class: "primary" }, ["もう一度"]);
+    const back = h("button", {}, ["設定に戻る"]);
+    // 棋譜で遊んだときの「もう一度」は同じ棋譜で、KataGo のときは新しいシードで遊ぶ
+    again.addEventListener("click", () => {
+      leave();
+      void prepareGame(root, { ...settings, seed: nextSeed });
+    });
+    back.addEventListener("click", () => {
+      leave();
+      showSettings(root, { ...settings, seed: nextSeed });
+    });
+    if (session.phase !== "finished") {
+      for (const input of [blackInput, whiteInput]) input.disabled = true;
+      scoreForm.querySelector(".buttons")?.remove();
+      colorPicker.hidden = true;
+    }
+    const lines: Node[] = [];
+    if (winner) {
+      phaseLabel.textContent = winner === "me" ? "あなたの勝ち！" : "CPU の勝ち…";
+      const mine = session.phase === "finished" ? formatTime(session.elapsed()) : "未完了";
+      const theirs = cpuPlayer!.phase === "finished" ? formatTime(cpuPlayer!.elapsed()) : "未完了";
+      lines.push(h("p", {}, [`あなた ${mine}・CPU ${theirs}`]));
+    } else {
+      phaseLabel.textContent = "整地完了！";
+      const time = session.elapsed();
+      const best = loadBest(settings.size);
+      const isBest = best === null || time < best;
+      if (isBest) saveBest(settings.size, time);
+      lines.push(h("p", {}, [isBest ? `${settings.size} 路のベストタイム更新！` : `${settings.size} 路のベスト: ${formatTime(best!)}`]));
+    }
     resultBox.replaceChildren(
       h("p", {}, [`黒 ${session.initialScores[BLACK]} 目・白 ${session.initialScores[WHITE]} 目`]),
-      h("p", {}, [isBest ? `${settings.size} 路のベストタイム更新！` : `${settings.size} 路のベスト: ${formatTime(best!)}`]),
+      ...lines,
       h("div", { class: "buttons" }, [again, back]),
     );
     resultBox.hidden = false;
   };
 
+  // --- CPU ---
+  let cpuWaiting = false;
+  /** CPU のカーソルを、操作した点（またはトレイ）へ動かす。 */
+  const moveCpuCursor = (action: CpuAction | null) => {
+    if (!cpu) return;
+    let target: { x: number; y: number } | null = null;
+    if (action && "point" in action) {
+      const box = view.svg.getBoundingClientRect();
+      const { x, y } = view.pointBox(action.point);
+      target = { x: box.left + x, y: box.top + y };
+    } else if (action?.kind === "pick-tray") {
+      const box = trays[cpuColor].view.svg.getBoundingClientRect();
+      target = { x: box.left + 20, y: box.top + 15 };
+    } else if (!cpuCursor.style.transform) {
+      const box = view.svg.getBoundingClientRect();
+      target = { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+    }
+    if (target) cpuCursor.style.transform = `translate(${target.x}px, ${target.y}px)`;
+    const held = cpu.player.hand?.stones[0];
+    cpuCursor.classList.toggle("holding-black", held?.color === BLACK);
+    cpuCursor.classList.toggle("holding-white", held?.color === WHITE);
+  };
+
+  const startCpu = () => {
+    if (!cpu) return;
+    const timer = window.setInterval(() => {
+      if (decided) return;
+      const before = session.penalties;
+      const action = cpu!.step();
+      cpuWaiting = action.kind === "idle" && cpu!.player.phase === "arrange";
+      moveCpuCursor(action);
+      penaltyCheck(before);
+      render();
+      decide();
+    }, CPU_INTERVAL[settings.cpuLevel]);
+    cleanups.push(() => window.clearInterval(timer));
+  };
+
   render();
+  moveCpuCursor(null);
 
   // カウントダウン: 3, 2, 1 の後に「スタート！」で開始
   let count = 3;
@@ -642,6 +882,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
     }
     window.clearInterval(countdownTimer);
     session.begin();
+    startCpu();
     updateTimer();
     countdown.classList.add("go");
     countdownNumber.textContent = "スタート！";
@@ -680,13 +921,24 @@ function radioGroup(
 }
 
 /** まだトレイに移していない死に石の数（手に持っている分も含む）。 */
-function countDeadStones(session: Session): number {
-  const onBoard = session.board.dead.reduce((n, d) => n + d, 0);
+function countDeadStones(session: Player): number {
+  const board = session.board;
+  let onBoard = 0;
+  if (session.color === null) {
+    onBoard = board.dead.reduce((n, d) => n + d, 0);
+  } else {
+    // 対戦: 自分の地の中の相手の死に石だけ
+    const { regions, regionOf } = analyze(board);
+    for (let i = 0; i < board.cells.length; i++) {
+      if (board.dead[i] === 1 && board.cells[i] !== session.color && regions[regionOf[i]].owner === session.color) onBoard++;
+    }
+  }
   return onBoard + (session.hand?.stones.filter((s) => s.dead).length ?? 0);
 }
 
-function trayElement(owner: Color) {
-  const name = owner === BLACK ? "黒のアゲハマ（白石）" : "白のアゲハマ（黒石）";
+/** who: 対戦でのトレイの持ち主の呼び名（「あなた」「CPU」）。 */
+function trayElement(owner: Color, who?: string) {
+  const name = `${who ?? (owner === BLACK ? "黒" : "白")}のアゲハマ（${owner === BLACK ? "白石" : "黒石"}）`;
   const stoneColor = opponent(owner);
   // 個数は目数（特にマイナス）の目安になるので表示しない
   const count = h("span", { class: "tray-count" }, []);
@@ -719,7 +971,16 @@ function formatTime(ms: number): string {
 }
 
 function loadSettings(): Settings {
-  const fallback: Settings = { size: 19, undoOnPenalty: true, replay: false, seed: randomSeed() };
+  const fallback: Settings = {
+    mode: "solo",
+    myColor: BLACK,
+    cpuLevel: "normal",
+    restricted: true,
+    size: 19,
+    undoOnPenalty: true,
+    replay: false,
+    seed: randomSeed(),
+  };
   try {
     const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "{}");
     return { ...fallback, ...saved, seed: fallback.seed };

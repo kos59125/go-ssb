@@ -14,7 +14,7 @@ export type CpuAction =
   | { kind: "complete" };
 
 /** CPU の強さ: 1 回の操作の間隔（ミリ秒）。仕様書 §3 */
-export const CPU_INTERVAL = { easy: 1200, normal: 750, hard: 400 } as const;
+export const CPU_INTERVAL = { easy: 2500, normal: 1500, hard: 800 } as const;
 export type CpuLevel = keyof typeof CPU_INTERVAL;
 
 /**

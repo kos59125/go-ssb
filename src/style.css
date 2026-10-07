@@ -567,3 +567,105 @@ button.primary {
 .radio-group:disabled {
   opacity: 0.55;
 }
+
+/* 石をつかむカーソル: 持っていないときは grab、持っているときは grabbing */
+.board,
+.tray-stones {
+  cursor: grab;
+}
+
+body.holding,
+body.holding .board,
+body.holding .tray-stones,
+body.holding .tray {
+  cursor: grabbing;
+}
+
+.game.finished .board,
+.game.finished .tray-stones {
+  cursor: default;
+}
+
+/* vs CPU */
+.cpu-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.cpu-settings[hidden] {
+  display: none;
+}
+
+.cpu-status {
+  font-weight: bold;
+  color: #2f5d8a;
+}
+
+.tray.readonly {
+  opacity: 0.75;
+}
+
+.tray.readonly .tray-stones {
+  cursor: not-allowed;
+}
+
+/* CPU のカーソル（常に表示し、操作する点へ動く） */
+.cpu-cursor {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: 20;
+  transition: transform 0.25s ease-out;
+}
+
+.cpu-cursor::before {
+  /* 矢印 */
+  content: "";
+  position: absolute;
+  left: -2px;
+  top: -2px;
+  width: 0;
+  height: 0;
+  border-left: 9px solid #2f5d8a;
+  border-right: 9px solid transparent;
+  border-top: 9px solid #2f5d8a;
+  border-bottom: 9px solid transparent;
+  filter: drop-shadow(0 1px 2px rgb(0 0 0 / 0.4));
+}
+
+.cpu-cursor-label {
+  position: absolute;
+  left: 14px;
+  top: 12px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: #2f5d8a;
+  color: #fff;
+  font-size: 11px;
+  font-weight: bold;
+}
+
+.cpu-cursor.holding-black::after,
+.cpu-cursor.holding-white::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.4);
+}
+
+.cpu-cursor.holding-black::after {
+  background: #1c1c1c;
+}
+
+.cpu-cursor.holding-white::after {
+  background: #fafafa;
+  border: 1px solid #555;
+}
