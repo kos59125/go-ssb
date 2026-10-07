@@ -38,6 +38,17 @@ export class GoGame {
     }
   }
 
+  clone(): GoGame {
+    const g = new GoGame(this.size);
+    g.cells.set(this.cells);
+    g.toPlay = this.toPlay;
+    g.koPoint = this.koPoint;
+    g.moves.push(...this.moves);
+    g.captures[1] = this.captures[1];
+    g.captures[2] = this.captures[2];
+    return g;
+  }
+
   neighbors(i: number): number[] {
     return this.adjacency[i];
   }

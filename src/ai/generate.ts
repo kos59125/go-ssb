@@ -28,6 +28,8 @@ export interface GenerateOptions {
   targetMargin?: number;
   /** true を返したら生成を中断する。 */
   shouldStop?: () => boolean;
+  /** 対局を作り直すときに理由とともに呼ばれる（調査用）。 */
+  onReject?: (reason: string) => void;
 }
 
 export class GenerationCancelled extends Error {
@@ -44,7 +46,7 @@ export async function generateGame(evaluate: Evaluator, options: GenerateOptions
   for (let attempt = 0; attempt < 10; attempt++) {
     const game = await selfPlay(evaluate, options);
     if (!game) continue;
-    const finished = await finish(evaluate, game, options.random ?? Math.random);
+    const finished = await finish(evaluate, game, options.random ?? Math.random, options.onReject);
     if (finished) return finished;
   }
   throw new Error("終局図を生成できませんでした");
@@ -57,50 +59,129 @@ async function selfPlay(evaluate: Evaluator, options: GenerateOptions): Promise<
   const game = new GoGame(size);
   const maxMoves = Math.round(size * size * 1.3);
 
-  while (!game.isOver()) {
-    if (game.moves.length >= maxMoves) return null;
+  const step = async (area: boolean) => {
     if (options.shouldStop?.()) throw new GenerationCancelled();
-    const ev = await evaluate(game);
-    game.play(chooseMove(game, ev, random, targetMargin));
+    const ev = await evaluate(game, { area });
+    game.play(area ? chooseCleanupMove(game, ev, random) : await chooseMove(game, ev, random, targetMargin, evaluate));
     options.onMove?.(game.moves.length);
+  };
+
+  // 本局（日本ルール）。連続 2 回のパスまで
+  while (!game.isOver()) {
+    if (game.moves.length >= maxMoves) return options.onReject?.("too long"), null;
+    await step(false);
+  }
+
+  // 後始末: 日本ルールではダメや手入れの価値が 0 なので、KataGo は打たずにパスする。
+  // 石と地で数えるルールで続けて、ダメ埋めと手入れ（当たりの解消など）を KataGo に打たせる
+  const cleanupLimit = game.moves.length + Math.round(size * size * 0.4);
+  let passes = 0;
+  while (passes < 2) {
+    if (game.moves.length >= cleanupLimit) return options.onReject?.("cleanup too long"), null;
+    await step(true);
+    passes = game.lastWasPass() ? passes + 1 : 0;
   }
   return game;
 }
 
-/** 方策から手をサンプリングする。 */
-function chooseMove(game: GoGame, ev: Evaluation, random: () => number, targetMargin: number): number {
+/**
+ * 本局の手を選ぶ。普段は方策からサンプリングする。
+ * 目数差が開いたら、方策の上位候補を 1 手先まで評価して、差が縮まる手を選ぶ。
+ */
+async function chooseMove(
+  game: GoGame,
+  ev: Evaluation,
+  random: () => number,
+  targetMargin: number,
+  evaluate: Evaluator,
+): Promise<number> {
   const area = game.size * game.size;
   const moveNumber = game.moves.length;
-  const pla = game.toPlay;
-  const lead = pla === BLACK ? ev.blackLead : -ev.blackLead;
+  const sign = game.toPlay === BLACK ? 1 : -1;
+  const lead = sign * ev.blackLead;
 
-  // 序盤はばらつきを持たせ、中盤以降は堅実に打つ
-  let temperature = moveNumber < area * 0.1 ? 1.0 : 0.5;
-  let topP = moveNumber < area * 0.1 ? 0.95 : 0.8;
-  // 差が開きすぎたら、リードしている側は緩く、負けている側は最善寄りに打つ
-  if (lead > targetMargin * 0.75) {
-    temperature = 1.5;
-    topP = 0.98;
-  } else if (lead < -targetMargin * 0.75) {
-    temperature = 0.25;
-    topP = 0.5;
+  if (bestIsPass(ev, area)) return PASS;
+  // 自分の確定地の中に打つ手（地を減らすだけの手）は、方策がよほど推さない限り打たない
+  const allowed = (i: number) => sign * ev.ownership[i] < 0.9 || ev.policy[i] > 0.3;
+
+  if (Math.abs(lead) <= targetMargin * 0.75) {
+    // 序盤はばらつきを持たせ、中盤以降は堅実に打つ
+    const opening = moveNumber < area * 0.1;
+    return sample(game, ev, random, opening ? 1.0 : 0.5, opening ? 0.95 : 0.8, allowed);
   }
 
-  const passProb = ev.policy[area];
-  // パスが最善なら素直にパスする（終局）
-  let best = PASS;
-  for (let i = 0; i < area; i++) if (ev.policy[i] > (best === PASS ? passProb : ev.policy[best])) best = i;
-  if (best === PASS) return PASS;
+  const candidates = topMoves(game, ev, allowed, 4);
+  if (candidates.length === 0) return PASS;
+  let best = candidates[0];
+  let bestCost = Infinity;
+  for (const point of candidates) {
+    const next = game.clone();
+    next.play(point);
+    const after = sign * (await evaluate(next)).blackLead;
+    // 負けている側は形勢が最も良くなる手、勝っている側はリードが目標の半分に近づく手
+    const cost = lead < 0 ? -after : Math.abs(after - targetMargin * 0.5);
+    if (cost < bestCost) {
+      bestCost = cost;
+      best = point;
+    }
+  }
+  return best;
+}
 
+/** 合法で allowed を満たす手のうち、方策の高い順に n 手。 */
+function topMoves(game: GoGame, ev: Evaluation, allowed: (i: number) => boolean, n: number): number[] {
+  const area = game.size * game.size;
+  const points: number[] = [];
+  for (let i = 0; i < area; i++) {
+    if (ev.policy[i] > 0 && allowed(i) && game.isLegal(i) && !game.isOwnEye(i)) points.push(i);
+  }
+  return points.sort((a, b) => ev.policy[b] - ev.policy[a]).slice(0, n);
+}
+
+/**
+ * 後始末の手を選ぶ（石と地で数えるルールで評価した方策を使う）。
+ * そのルールでは自分の地に打っても損がないので、打てる場所を次に限る。
+ * - どちらの地とも言えない点（ダメなど）
+ * - 呼吸点が 2 以下の連に接する点（手入れ・当たりの解消）。ただし相手の地の中は除く
+ * 候補の方策が低ければパスする。
+ */
+function chooseCleanupMove(game: GoGame, ev: Evaluation, random: () => number): number {
+  const sign = game.toPlay === BLACK ? 1 : -1;
+  const libs = game.libertyCounts();
+  const weak = (i: number) => game.neighbors(i).some((j) => game.cells[j] !== EMPTY && libs[j] <= 2);
+  const allowed = (i: number) => {
+    const own = sign * ev.ownership[i];
+    if (Math.abs(own) < 0.6) return true;
+    return own > 0 && weak(i);
+  };
+  const move = sample(game, ev, random, 0.25, 0.5, allowed);
+  return move === PASS || ev.policy[move] < 0.05 ? PASS : move;
+}
+
+function bestIsPass(ev: Evaluation, area: number): boolean {
+  let best = 0;
+  for (let i = 1; i < area; i++) if (ev.policy[i] > ev.policy[best]) best = i;
+  return ev.policy[area] >= ev.policy[best];
+}
+
+/** 合法で allowed を満たす手から、top-p で候補を絞り、温度をかけてサンプリングする。 */
+function sample(
+  game: GoGame,
+  ev: Evaluation,
+  random: () => number,
+  temperature: number,
+  topP: number,
+  allowed: (i: number) => boolean,
+): number {
+  const area = game.size * game.size;
   const candidates: { point: number; weight: number }[] = [];
   for (let i = 0; i < area; i++) {
-    if (ev.policy[i] <= 0 || !game.isLegal(i) || game.isOwnEye(i)) continue;
+    if (ev.policy[i] <= 0 || !allowed(i) || !game.isLegal(i) || game.isOwnEye(i)) continue;
     candidates.push({ point: i, weight: ev.policy[i] });
   }
   if (candidates.length === 0) return PASS;
   candidates.sort((a, b) => b.weight - a.weight);
 
-  // top-p で候補を絞り、温度をかけてサンプリング
   const total = candidates.reduce((s, c) => s + c.weight, 0);
   let acc = 0;
   const kept: { point: number; weight: number }[] = [];
@@ -122,7 +203,12 @@ function chooseMove(game: GoGame, ev: Evaluation, random: () => number, targetMa
  * 終局後の処理: 死に石の判定、ダメ埋め、盤の向きの調整。
  * 判定が曖昧な対局は null を返して作り直す。
  */
-async function finish(evaluate: Evaluator, game: GoGame, random: () => number): Promise<GeneratedGame | null> {
+async function finish(
+  evaluate: Evaluator,
+  game: GoGame,
+  random: () => number,
+  reject: (reason: string) => void = () => {},
+): Promise<GeneratedGame | null> {
   const size = game.size;
   const area = size * size;
   const ev = await evaluate(game);
@@ -145,7 +231,7 @@ async function finish(evaluate: Evaluator, game: GoGame, random: () => number): 
 
   const board = new Board(size, game.cells.slice(), dead);
   const dameFills = fillDame(game, board, own);
-  if (!dameFills) return null;
+  if (!dameFills) return reject("dame"), null;
 
   // 地の判定が KataGo の所有権と食い違う対局は使わない
   const analysis = analyze(board);
@@ -153,11 +239,19 @@ async function finish(evaluate: Evaluator, game: GoGame, random: () => number): 
     if (!region.territory || region.owner === null) continue;
     const sign = region.owner === BLACK ? 1 : -1;
     const avg = region.points.reduce((s, j) => s + own[j], 0) / region.points.length;
-    if (avg * sign < 0.5) return null;
+    if (avg * sign < 0.5) return reject("territory"), null;
   }
 
+  // 当たりのまま残っている生きた石があれば使わない（後始末が終わっていない）
+  if (hasLiveStoneInAtari(game, board)) return reject("atari"), null;
+
   const position: Position = { board, trays: { [BLACK]: game.captures[BLACK], [WHITE]: game.captures[WHITE] } };
-  const result = japaneseResult(position);
+  // こちらで数えた結果が KataGo の形勢判断と大きく食い違う対局は、死活の判定を誤っているとみなす
+  const diff = japaneseScore(position);
+  if (Math.abs(diff - ev.blackLead) > Math.max(3, Math.abs(ev.blackLead) * 0.15)) {
+    return reject(`score (ours ${diff}, KataGo ${ev.blackLead.toFixed(1)})`), null;
+  }
+  const result = diff > 0 ? `B+${diff.toFixed(1)}` : `W+${(-diff).toFixed(1)}`;
   return orient({ size, komi: KOMI, moves: game.moves.slice(), position, dameFills, result }, random);
 }
 
@@ -212,8 +306,18 @@ function canFill(game: GoGame, board: Board, i: number, color: Color): boolean {
   return true;
 }
 
-/** 日本ルールの結果。目数 = 地 − 埋められる自分の石（§1）。 */
-function japaneseResult(position: Position): string {
+/** 生きた石だけを見て、呼吸点が 1 つしかない連があるか。 */
+function hasLiveStoneInAtari(game: GoGame, board: Board): boolean {
+  const cells = new Uint8Array(board.cells.length);
+  for (let k = 0; k < cells.length; k++) cells[k] = board.isLiveStone(k) ? board.cells[k] : EMPTY;
+  for (let i = 0; i < cells.length; i++) {
+    if (cells[i] !== EMPTY && game.chain(i, cells).liberties.size < 2) return true;
+  }
+  return false;
+}
+
+/** 日本ルールでの黒の勝ち目数（コミ込み）。目数 = 地 − 埋められる自分の色の石（§1）。 */
+function japaneseScore(position: Position): number {
   const analysis = analyze(position.board);
   const territory = { [BLACK]: 0, [WHITE]: 0 };
   for (const r of analysis.regions) if (r.territory && r.owner !== null) territory[r.owner] += r.points.length;
@@ -227,8 +331,7 @@ function japaneseResult(position: Position): string {
   }
   const black = territory[BLACK] - deadBlack - trays[WHITE];
   const white = territory[WHITE] - deadWhite - trays[BLACK] + KOMI;
-  const diff = black - white;
-  return diff > 0 ? `B+${diff.toFixed(1)}` : `W+${(-diff).toFixed(1)}`;
+  return black - white;
 }
 
 /** 黒の初手が右上（x が大きく、y が小さい側）に来るように盤を回転・反転する。 */

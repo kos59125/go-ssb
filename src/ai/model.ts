@@ -15,7 +15,8 @@ export interface Evaluation {
   ownership: Float32Array;
 }
 
-export type Evaluator = (game: GoGame) => Promise<Evaluation>;
+/** area: 中国ルール相当（石と地で数える）で評価する。 */
+export type Evaluator = (game: GoGame, options?: { area?: boolean }) => Promise<Evaluation>;
 
 type Ort = {
   InferenceSession: typeof InferenceSession;
@@ -26,9 +27,9 @@ type Ort = {
 export async function createEvaluator(ort: Ort, model: string | Uint8Array, komi: number): Promise<Evaluator> {
   const session =
     typeof model === "string" ? await ort.InferenceSession.create(model) : await ort.InferenceSession.create(model);
-  return async (game) => {
+  return async (game, options) => {
     const n = game.size;
-    const { spatial, global } = buildFeatures(game, komi);
+    const { spatial, global } = buildFeatures(game, komi, options?.area);
     const out = await session.run({
       spatial: new ort.Tensor("float32", spatial, [1, NUM_SPATIAL, n, n]),
       global: new ort.Tensor("float32", global, [1, NUM_GLOBAL]),
