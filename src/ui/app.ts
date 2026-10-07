@@ -271,22 +271,26 @@ function showSettings(root: HTMLElement, settings: Settings): void {
     seedInput.value = randomSeed();
     prefetch();
   });
+  /** 画面で選んでいる設定。 */
+  const readForm = (): Settings => ({
+    mode: isCpu() ? "cpu" : "solo",
+    myColor: selected("my-color") === "white" ? WHITE : BLACK,
+    cpuLevel: selected("cpu-level") as CpuLevel,
+    restricted: selected("restricted") === "on",
+    size: Number(selected("size")),
+    undoOnPenalty: selected("undo") === "undo",
+    handLimit: readHandLimit(root, "hand-limit"),
+    handLimits: { [BLACK]: readHandLimit(root, "hand-limit-black"), [WHITE]: readHandLimit(root, "hand-limit-white") },
+    shapeRules: shapeRules(),
+    replay: selected("start") === "replay",
+    seed: seedInput.value.trim() || randomSeed(),
+  });
+  // 設定を変えたらすぐブラウザーに保存する（シードは保存しない）。次に開いたときも同じ設定にする
+  root.querySelector(".settings")!.addEventListener("change", () => saveSettings(readForm()));
   startButton.addEventListener("click", () => {
     window.clearTimeout(seedTimer);
     const sgf = selected("source") === "sgf" ? record : undefined;
-    const next: Settings = {
-      mode: isCpu() ? "cpu" : "solo",
-      myColor: selected("my-color") === "white" ? WHITE : BLACK,
-      cpuLevel: selected("cpu-level") as CpuLevel,
-      restricted: selected("restricted") === "on",
-      size: Number(selected("size")),
-      undoOnPenalty: selected("undo") === "undo",
-      handLimit: readHandLimit(root, "hand-limit"),
-      handLimits: { [BLACK]: readHandLimit(root, "hand-limit-black"), [WHITE]: readHandLimit(root, "hand-limit-white") },
-      shapeRules: shapeRules(),
-      replay: selected("start") === "replay",
-      seed: seedInput.value.trim() || randomSeed(),
-    };
+    const next = readForm();
     saveSettings(next);
     void prepareGame(root, sgf ? { ...next, size: sgf.size, record: sgf } : next);
   });
@@ -1579,13 +1583,13 @@ function seedText(settings: Settings): string {
 function soloShareText(r: SoloRecord<Settings>, rank: number | null): string {
   const penalty = r.penalties > 0 ? `（ペナルティ ${r.penalties} 回込み）` : "（ノーミス）";
   const place = rank === 1 ? `自己ベスト更新！` : rank !== null ? `自己ベスト ${rank} 位。` : "";
-  return `${r.size} 路の終局図を ${formatTime(r.time)} で整地しました${penalty}${place}${seedText(r.settings)}`;
+  return `${r.size} 路の終局図を ${formatSeconds(r.time)}で整地しました${penalty}${place}${seedText(r.settings)}`;
 }
 
 /** vs CPU の戦績のシェア文。 */
 function cpuShareText(r: CpuRecord<Settings>): string {
   const level = CPU_LEVELS[r.settings.cpuLevel]?.label ?? r.settings.cpuLevel;
-  const time = (ms: number | null) => (ms === null ? "未完了" : formatTime(ms));
+  const time = (ms: number | null) => (ms === null ? "未完了" : formatSeconds(ms));
   const outcome = r.result === "win" ? "に勝ちました！" : r.result === "lose" ? "に負けました…" : "にギブアップしました…";
   return `vs CPU（${level}・${r.size} 路）${outcome} あなた ${time(r.myTime)}・CPU ${time(r.cpuTime)}${seedText(r.settings)}`;
 }
@@ -1610,6 +1614,11 @@ function openResultDialog(root: HTMLElement, title: string, lines: string[], sha
   );
   root.append(dialog);
   dialog.showModal();
+}
+
+/** シェア用のタイム（秒、小数 1 桁。例: 54.6 秒、83.4 秒）。分に直すより比べやすい。 */
+function formatSeconds(ms: number): string {
+  return `${(Math.floor(ms / 100) / 10).toFixed(1)} 秒`;
 }
 
 function formatDate(ms: number): string {
