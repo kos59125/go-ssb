@@ -290,7 +290,7 @@ function replayGame(root: HTMLElement, game: GeneratedGame): Promise<void> {
     ]),
   );
   const go = new GoGame(game.size);
-  for (const { point, color } of game.setup) go.cells[point] = color;
+  for (const { point, color } of game.setup) go.setup(point, color);
   const show = () => {
     view.render(new Board(game.size, go.cells.slice()), new Set(), []);
     for (const color of [BLACK, WHITE] as const) {

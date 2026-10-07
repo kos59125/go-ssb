@@ -52,7 +52,7 @@ export class GenerationCancelled extends Error {
  */
 export async function finishRecord(evaluate: Evaluator, record: GameRecord, forCpu = false): Promise<GeneratedGame> {
   const game = new GoGame(record.size);
-  for (const { point, color } of record.setup) if (point !== PASS) game.cells[point] = color;
+  for (const { point, color } of record.setup) if (point !== PASS) game.setup(point, color);
   for (const [k, move] of record.moves.entries()) {
     game.toPlay = move.color;
     if (!game.isLegal(move.point)) throw new Error(`${k + 1} 手目が打てない手です`);

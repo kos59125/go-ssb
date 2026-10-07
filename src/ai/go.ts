@@ -19,6 +19,8 @@ export class GoGame {
   /** コウで直後に打てない点。なければ -1。 */
   koPoint = -1;
   readonly moves: Move[] = [];
+  /** 初期配置（置き石など）の黒石の数 − 白石の数。KataGo の入力のコミ補正に使う。 */
+  setupBalance = 0;
   /** 各色が取った石の数（captures[BLACK] は黒が取った白石の数）。 */
   readonly captures: Record<Color, number> = { 1: 0, 2: 0 };
   private readonly adjacency: number[][];
@@ -38,11 +40,19 @@ export class GoGame {
     }
   }
 
+  /** 初期配置の石を置く（置き石など。着手としては数えない）。 */
+  setup(point: number, color: Color): void {
+    if (this.cells[point] !== EMPTY) return;
+    this.cells[point] = color;
+    this.setupBalance += color === BLACK ? 1 : -1;
+  }
+
   clone(): GoGame {
     const g = new GoGame(this.size);
     g.cells.set(this.cells);
     g.toPlay = this.toPlay;
     g.koPoint = this.koPoint;
+    g.setupBalance = this.setupBalance;
     g.moves.push(...this.moves);
     g.captures[1] = this.captures[1];
     g.captures[2] = this.captures[2];

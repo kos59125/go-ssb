@@ -4,7 +4,8 @@ import { describe, expect, it } from "vitest";
 import { analyze, score } from "../core/analysis";
 import { BLACK, WHITE } from "../core/board";
 import { KOMI, finishRecord } from "./generate";
-import { PASS } from "./go";
+import { buildFeatures } from "./features";
+import { GoGame, PASS } from "./go";
 import { createEvaluator } from "./model";
 import { MODEL_PATH } from "./protocol";
 import { parseSgf } from "./sgf";
@@ -30,6 +31,49 @@ describe("parseSgf", () => {
     expect(() => parseSgf("(;SZ[9];B[aa]")).toThrow();
     expect(() => parseSgf("hello")).toThrow();
   });
+});
+
+describe("置き碁とパス", () => {
+  // 2 子局（黒の置き石 2 個、白から打つ）。途中にパスがあり、その後も着手が続く
+  const SGF = `(;FF[4]GM[1]SZ[9]HA[2]KM[0.5]RE[W+R]AB[cc][gg]
+    ;W[ec];B[ce];W[];B[eg];W[ge];B[tt];W[gc])`;
+
+  it("置き石を初期配置として読み、白から始まる手順とパスを読む", () => {
+    const r = parseSgf(SGF);
+    expect(r.setup).toEqual([
+      { color: BLACK, point: 2 * 9 + 2 },
+      { color: BLACK, point: 6 * 9 + 6 },
+    ]);
+    expect(r.moves.map((m) => [m.color, m.point])).toEqual([
+      [WHITE, 2 * 9 + 4],
+      [BLACK, 4 * 9 + 2],
+      [WHITE, PASS],
+      [BLACK, 6 * 9 + 4],
+      [WHITE, 4 * 9 + 6],
+      [BLACK, PASS],
+      [WHITE, 2 * 9 + 6],
+    ]);
+  });
+
+  it("置き石は KataGo の入力で着手と同じようにコミを補正する", () => {
+    const g = new GoGame(9);
+    g.setup(2 * 9 + 2, BLACK);
+    g.setup(6 * 9 + 6, BLACK);
+    g.toPlay = WHITE;
+    // 白番: 白のコミ = 6.5 + 置き石 2 → 白から見て +8.5
+    expect(buildFeatures(g, KOMI).global[5]).toBeCloseTo(8.5 / 20);
+  });
+
+  it("棋譜から局面を作れる（置き石・パス後の着手を含む）", async () => {
+    ort.env.wasm.numThreads = 1;
+    const evaluate = await createEvaluator(ort, new Uint8Array(readFileSync(`public/${MODEL_PATH}`)), KOMI);
+    const game = await finishRecord(evaluate, parseSgf(SGF));
+    const { board } = game.position;
+    for (const p of [2 * 9 + 2, 6 * 9 + 6, 4 * 9 + 2, 6 * 9 + 4]) expect(board.cells[p]).toBe(BLACK);
+    for (const p of [2 * 9 + 4, 4 * 9 + 6, 2 * 9 + 6]) expect(board.cells[p]).toBe(WHITE);
+    expect(game.setup).toHaveLength(2);
+    expect(game.moves).toHaveLength(7);
+  }, 60_000);
 });
 
 describe("finishRecord（KataGo で死活判定）", () => {

@@ -48,7 +48,8 @@ export function buildFeatures(
   // 地で数えるとき、KataGo は着手 1 回ごとに 1 目を相手に足してネットワークに渡す
   // （boardhistory.cpp の whiteBonusScore）。ネットワークはアゲハマの数を見られないため、
   // 「地 + アゲハマ」を「石 + 地 − 着手数」として扱う
-  let whiteBonus = 0;
+  // 初期配置の石（置き石など）も着手と同じように数える（KataGo も同じ）
+  let whiteBonus = area ? 0 : game.setupBalance;
   if (!area) {
     for (const move of moves) {
       if (move.point !== PASS) whiteBonus += move.color === WHITE ? -1 : 1;
