@@ -137,6 +137,23 @@ export class Match {
   }
 
   /**
+   * 境界が開いている間に目数を変えたプレイヤー。ほかのプレイヤーが境界を開いてから
+   * 動かした石を元に戻した盤で、境界が閉じていて目数が変わっていれば、そのプレイヤーの操作だけで
+   * 目数が変わったと分かる。
+   */
+  culprits(): Player[] {
+    return this.players.filter((p) => {
+      if (p.pendingMoves.length === 0) return false;
+      const position = { board: this.board.clone(), trays: { ...this.position.trays } };
+      for (const other of this.players) if (other !== p) revertMoves(position, other.pendingMoves);
+      if (openPoints(position.board) > this.baseOpenPoints.size) return false;
+      const analysis = analyze(position.board);
+      const scores = { [BLACK]: score(position, BLACK, analysis), [WHITE]: score(position, WHITE, analysis) };
+      return !sameScores(scores, this.settledScores);
+    });
+  }
+
+  /**
    * 境界が開いている所（開始時のセキを除く、両方の色に接する領域）。
    * 接している石の少ない方の色が 3 個以下なら、その石（地に混ざった別の色の石）を返す。
    * そうでなければ、両方の色に接している空点（境界の切れ目）を返す。
@@ -180,6 +197,14 @@ export class Match {
     }
     this.settledColor = colorMap(this.board);
     for (const p of this.players) p.clearPending();
+  }
+
+  /** 最後に境界が閉じていた時点から、持ち主（石の色または地の色、どちらでもない）が変わった点。 */
+  changedPoints(): number[] {
+    const now = colorMap(this.board);
+    const points: number[] = [];
+    for (let i = 0; i < now.length; i++) if (this.settledColor[i] !== now[i]) points.push(i);
+    return points;
   }
 
   /** 最後に境界が閉じていた時点から、持ち主（石の色または地の色）が黒⇔白で入れ替わった点。 */
@@ -533,14 +558,18 @@ export class Player {
     } else if (sameScores(scores, match.settledScores)) {
       if (pending.carriedMark) for (const i of pending.placed) this.marks.add(i);
     } else {
-      // 境界が開く前と比べて、持ち主が黒⇔白で入れ替わった点が原因（例: 白の壁石を黒石に置き換えた）。
+      // 目数を変えたプレイヤーを特定する: 境界が開く前と比べて持ち主が変わった点に、
+      // 石を置いたり、そこから石を持ち出したりしたプレイヤー。見つからなければ境界を閉じた自分
+      let culprits = match.culprits();
+      if (culprits.length === 0) {
+        const changed = new Set(match.changedPoints());
+        culprits = match.players.filter((pl) => pl.touched(changed));
+      }
+      // 持ち主が黒⇔白で入れ替わった点が原因（例: 白の壁石を黒石に置き換えた）。
       // 見つからなければ、境界が開いてから動かした石すべてに印を付ける
       const flipped = match.flippedPoints();
-      this.penalize(
-        pending.moves,
-        flipped.length > 0 ? flipped : pending.placed,
-        flipped.length > 0 ? [] : pending.origins,
-      );
+      for (const pl of culprits.length > 0 ? culprits : [this]) pl.penalizePending(flipped);
+      if (!this.boundaryOpen) match.markSettled();
       return;
     }
     match.markSettled();
@@ -563,7 +592,26 @@ export class Player {
   }
 
   /** ペナルティを科し、設定に応じて自分の動かした石を元に戻すか、印を付ける。 */
-  private penalize(moves: Move[], placed: number[], origins: number[]): void {
+  /** 境界が開いてから動かした石。 */
+  get pendingMoves(): readonly Move[] {
+    return this.pending.moves;
+  }
+
+  /** 境界が開いてから自分が動かした石が、points のどれかに触れているか。 */
+  touched(points: Set<number>): boolean {
+    return this.pending.moves.some(
+      (m) => (m.from.kind === "board" && points.has(m.from.point)) || (m.to.kind === "board" && points.has(m.to.point)),
+    );
+  }
+
+  /** 境界が閉じた時点で目数を変えていたときのペナルティ。境界が開いてから自分が動かした石を対象にする。 */
+  penalizePending(flipped: number[]): void {
+    const { moves, placed, origins } = this.pending;
+    // 境界の状態の記録し直し（markSettled）は、責任者全員を処理した後に呼び出し側で行う
+    this.penalize(moves, flipped.length > 0 ? flipped : placed, flipped.length > 0 ? [] : origins, false);
+  }
+
+  private penalize(moves: Move[], placed: number[], origins: number[], settle = true): void {
     this.penalties++;
     this.clearPending();
     if (this.match.options.undoOnPenalty) {
@@ -572,7 +620,7 @@ export class Player {
       for (const i of [...placed, ...origins]) this.marks.add(i);
     }
     if (sameScores(this.scores(), this.initialScores)) this.marks.clear();
-    if (!this.boundaryOpen) this.match.markSettled();
+    if (settle && !this.boundaryOpen) this.match.markSettled();
   }
 
   /**
@@ -641,6 +689,27 @@ function colorMap(board: Board): Uint8Array {
   }
   for (let i = 0; i < map.length; i++) if (board.isLiveStone(i)) map[i] = board.cells[i];
   return map;
+}
+
+/**
+ * 石の移動を逆順に元に戻す（目数の判定用）。同じ色の石は区別しないので、
+ * 置いた先にもう石がなかったり、元の点が埋まっていたりしたら、その分は飛ばす。
+ */
+function revertMoves(position: Position, moves: readonly Move[]): void {
+  const { board, trays } = position;
+  for (const m of [...moves].reverse()) {
+    if (m.to.kind === "board") {
+      if (board.cells[m.to.point] !== m.color) continue;
+      board.set(m.to.point % board.size, Math.floor(m.to.point / board.size), EMPTY);
+    } else {
+      if (trays[m.to.owner] <= 0) continue;
+      trays[m.to.owner]--;
+    }
+    if (m.from.kind === "tray") trays[m.from.owner]++;
+    else if (board.cells[m.from.point] === EMPTY) {
+      board.set(m.from.point % board.size, Math.floor(m.from.point / board.size), m.color, m.dead);
+    }
+  }
 }
 
 /** どちらの地でもない空点の数。 */
