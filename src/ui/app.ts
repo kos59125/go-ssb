@@ -108,7 +108,7 @@ async function prepareGame(root: HTMLElement, settings: Settings): Promise<void>
   }
   if (cancelled) return;
   if (settings.replay) await replayGame(root, game);
-  showGame(root, settings, game.position, game.result);
+  showGame(root, settings, game.position);
 }
 
 /** 棋譜を REPLAY_MS かけて並べる。 */
@@ -119,7 +119,7 @@ function replayGame(root: HTMLElement, game: GeneratedGame): Promise<void> {
   root.replaceChildren(
     h("main", { class: "game" }, [
       h("div", { class: "board-wrap" }, [view.svg]),
-      h("aside", { class: "panel" }, [label, h("p", { class: "note" }, [`結果: ${game.result}`]), skip]),
+      h("aside", { class: "panel" }, [label, skip]),
     ]),
   );
   const go = new GoGame(game.size);
@@ -155,7 +155,7 @@ type Drag =
   | { kind: "carry" }
   | null;
 
-function showGame(root: HTMLElement, settings: Settings, position: Position, gameResult?: string): void {
+function showGame(root: HTMLElement, settings: Settings, position: Position): void {
   const session = new Session(position, { undoOnPenalty: settings.undoOnPenalty });
   const view = new BoardView(settings.size);
 
@@ -381,7 +381,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, gam
     const result = session.complete(answer);
     if (result.ok) {
       cleanup();
-      showResult(root, settings, session, gameResult);
+      showResult(root, settings, session);
     } else {
       flash(`まだ完了していません（+${PENALTY_MS / 1000} 秒）`);
       render();
@@ -463,7 +463,7 @@ function askScores(root: HTMLElement): Promise<Record<Color, number> | null> {
   });
 }
 
-function showResult(root: HTMLElement, settings: Settings, session: Session, result?: string): void {
+function showResult(root: HTMLElement, settings: Settings, session: Session): void {
   const time = session.elapsed();
   const best = loadBest(settings.size);
   const isBest = best === null || time < best;
@@ -476,7 +476,7 @@ function showResult(root: HTMLElement, settings: Settings, session: Session, res
       h("p", { class: "result-time" }, [formatTime(time)]),
       h("p", {}, [`ペナルティ ${session.penalties} 回（+${(session.penalties * PENALTY_MS) / 1000} 秒）`]),
       h("p", {}, [
-        `黒 ${session.initialScores[BLACK]} 目・白 ${session.initialScores[WHITE]} 目${result ? `（コミ 6.5 目で ${result}）` : ""}`,
+        `黒 ${session.initialScores[BLACK]} 目・白 ${session.initialScores[WHITE]} 目`,
       ]),
       h("p", {}, [isBest ? `${settings.size} 路のベストタイム更新！` : `${settings.size} 路のベスト: ${formatTime(best!)}`]),
       h("div", { class: "buttons" }, [again, back]),
