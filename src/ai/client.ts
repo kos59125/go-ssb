@@ -19,8 +19,8 @@ export class GameGenerator {
   private readonly taking = new Set<number>();
 
   /** 裏で 1 局生成しておく。ほかの先読みは中断する。 */
-  prefetch(size: number, seed: number): void {
-    const key = `${size}:${seed}`;
+  prefetch(size: number, seed: number, forCpu = false): void {
+    const key = `${size}:${seed}:${forCpu}`;
     for (const [other, entry] of this.prefetched) {
       if (other === key || this.taking.has(entry.id)) continue;
       this.worker?.postMessage({ type: "cancel", id: entry.id } satisfies WorkerRequest);
@@ -28,7 +28,7 @@ export class GameGenerator {
     }
     if (this.prefetched.has(key)) return;
     const id = this.nextId++;
-    const promise = this.request(id, size, seed);
+    const promise = this.request(id, size, seed, forCpu);
     promise.catch(() => {
       if (this.prefetched.get(key)?.id === id) this.prefetched.delete(key);
     });
@@ -36,9 +36,9 @@ export class GameGenerator {
   }
 
   /** 生成済み（または生成中）の 1 局を受け取る。 */
-  async take(size: number, seed: number, onProgress?: (move: number) => void): Promise<GeneratedGame> {
-    const key = `${size}:${seed}`;
-    this.prefetch(size, seed);
+  async take(size: number, seed: number, forCpu: boolean, onProgress?: (move: number) => void): Promise<GeneratedGame> {
+    const key = `${size}:${seed}:${forCpu}`;
+    this.prefetch(size, seed, forCpu);
     const entry = this.prefetched.get(key)!;
     const listener = this.pending.get(entry.id);
     if (listener) listener.onProgress = onProgress;
@@ -52,20 +52,20 @@ export class GameGenerator {
   }
 
   /** 実戦の棋譜（SGF）から整地用の局面を作る。 */
-  fromRecord(record: GameRecord): Promise<GeneratedGame> {
+  fromRecord(record: GameRecord, forCpu = false): Promise<GeneratedGame> {
     const worker = this.ensureWorker();
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      worker.postMessage({ type: "record", id, record, modelUrl: modelUrl() } satisfies WorkerRequest);
+      worker.postMessage({ type: "record", id, record, forCpu, modelUrl: modelUrl() } satisfies WorkerRequest);
     });
   }
 
-  private request(id: number, size: number, seed: number): Promise<GeneratedGame> {
+  private request(id: number, size: number, seed: number, forCpu: boolean): Promise<GeneratedGame> {
     const worker = this.ensureWorker();
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      worker.postMessage({ type: "generate", id, size, seed, modelUrl: modelUrl() } satisfies WorkerRequest);
+      worker.postMessage({ type: "generate", id, size, seed, forCpu, modelUrl: modelUrl() } satisfies WorkerRequest);
     });
   }
 

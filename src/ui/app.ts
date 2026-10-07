@@ -174,7 +174,7 @@ async function prepareGame(root: HTMLElement, settings: Settings): Promise<void>
   try {
     game = settings.record
       ? await generator.fromRecord(settings.record)
-      : await generator.take(settings.size, seed, (move) => (status.textContent = `自動対局中… ${move} 手目`));
+      : await generator.take(settings.size, seed, false, (move) => (status.textContent = `自動対局中… ${move} 手目`));
   } catch (err) {
     if (cancelled) return;
     status.textContent = `終局図を生成できませんでした（${err instanceof Error ? err.message : err}）。`;

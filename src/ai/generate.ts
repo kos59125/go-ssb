@@ -3,6 +3,7 @@ import { BLACK, Board, Color, EMPTY, WHITE, opponent } from "../core/board";
 import { Evaluation, Evaluator } from "./model";
 import { GoGame, Move, PASS } from "./go";
 import type { GameRecord } from "./sgf";
+import { SerializedLayout, planLayouts } from "../game/layout";
 
 export const KOMI = 6.5;
 
@@ -18,6 +19,8 @@ export interface GeneratedGame {
   dameFills: Move[];
   /** 置き石などの初期配置（SGF の AB / AW）。 */
   setup: Move[];
+  /** vs CPU 用: 死に石を取った後の黒地・白地の整地の形（見つからなければ null）。 */
+  layouts?: Record<Color, SerializedLayout | null>;
   /** 日本ルールでの結果（例: "B+3.5"）。 */
   result: string;
 }
@@ -33,6 +36,8 @@ export interface GenerateOptions {
   shouldStop?: () => boolean;
   /** 対局を作り直すときに理由とともに呼ばれる（調査用）。 */
   onReject?: (reason: string) => void;
+  /** vs CPU 用: CPU が整地できる（黒地・白地とも整地の形が見つかる）局面だけを作る。 */
+  forCpu?: boolean;
 }
 
 export class GenerationCancelled extends Error {
@@ -45,7 +50,7 @@ export class GenerationCancelled extends Error {
  * 実戦の終局済みの棋譜（SGF）から整地用の局面を作る。死に石は KataGo の所有権で判定し、
  * 残ったダメは埋める。作り直しはできないので、判定に引っかかってもそのまま使う。
  */
-export async function finishRecord(evaluate: Evaluator, record: GameRecord): Promise<GeneratedGame> {
+export async function finishRecord(evaluate: Evaluator, record: GameRecord, forCpu = false): Promise<GeneratedGame> {
   const game = new GoGame(record.size);
   for (const { point, color } of record.setup) if (point !== PASS) game.cells[point] = color;
   for (const [k, move] of record.moves.entries()) {
@@ -54,7 +59,9 @@ export async function finishRecord(evaluate: Evaluator, record: GameRecord): Pro
     game.play(move.point);
   }
   const finished = await finish(evaluate, game, { random: Math.random, record });
-  return { ...finished!, result: record.result ?? finished!.result };
+  // 実戦の棋譜は作り直せないので、整地の形が見つからない色は null のまま渡す
+  const layouts = forCpu ? planLayouts(finished!.position) : undefined;
+  return { ...finished!, result: record.result ?? finished!.result, layouts };
 }
 
 /**
@@ -62,11 +69,15 @@ export async function finishRecord(evaluate: Evaluator, record: GameRecord): Pro
  * 条件を満たさない対局は作り直す。
  */
 export async function generateGame(evaluate: Evaluator, options: GenerateOptions): Promise<GeneratedGame> {
-  for (let attempt = 0; attempt < 10; attempt++) {
+  for (let attempt = 0; attempt < 20; attempt++) {
     const game = await selfPlay(evaluate, options);
     if (!game) continue;
     const finished = await finish(evaluate, game, { random: options.random ?? Math.random, reject: options.onReject });
-    if (finished) return finished;
+    if (!finished) continue;
+    if (!options.forCpu) return finished;
+    const layouts = planLayouts(finished.position);
+    if (layouts[BLACK] && layouts[WHITE]) return { ...finished, layouts };
+    options.onReject?.("layout");
   }
   throw new Error("終局図を生成できませんでした");
 }
