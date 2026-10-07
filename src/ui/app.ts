@@ -452,7 +452,6 @@ function showGame(
     });
   }
   const cpuPlayer = cpu?.player ?? null;
-  if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__ssb = { session, cpu, layouts, position };
   // 自分が白なら盤を 180° 回して表示する（仕様書 §4）
   const view = new BoardView(settings.size, cpuMode && myColor === WHITE);
   const colorName = (c: Color) => (c === BLACK ? "黒" : "白");
