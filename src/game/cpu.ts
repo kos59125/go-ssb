@@ -28,16 +28,19 @@ export type CpuLevel = keyof typeof CPU_INTERVAL;
  */
 export class Cpu {
   readonly player: Player;
-  private layout: Layout | null;
+  /** 担当する地の色ごとの計画。 */
+  private readonly layouts = new Map<Color, Layout | null>();
 
-  constructor(player: Player, layout: SerializedLayout | null) {
+  /**
+   * @param layouts 担当する地の色ごとの整地の形。ひとりでモードのおまかせ（ギブアップ）では
+   *   黒地・白地の両方を担当する。
+   */
+  constructor(player: Player, layouts: Partial<Record<Color, SerializedLayout | null>>) {
     this.player = player;
-    this.layout = layout ? { area: new Set(layout.area), empties: new Set(layout.empties) } : null;
-  }
-
-  /** 整地する地の色。 */
-  get assigned(): Color {
-    return opponent(this.player.color!);
+    for (const color of player.assigned) {
+      const layout = layouts[color];
+      this.layouts.set(color, layout ? { area: new Set(layout.area), empties: new Set(layout.empties) } : null);
+    }
   }
 
   step(): CpuAction {
@@ -48,13 +51,13 @@ export class Cpu {
     return this.arrange();
   }
 
-  /** 自分の地の中にある相手の死に石を 1 個取る。 */
+  /** 死に石を 1 個取る（対戦では自分の地の中の相手の死に石、ひとりでモードではすべての死に石）。 */
   private removeDead(): CpuAction {
     const p = this.player;
     const { regions, regionOf } = analyze(p.board);
     for (let i = 0; i < p.board.cells.length; i++) {
-      if (p.board.dead[i] !== 1 || p.board.cells[i] !== this.assigned) continue;
-      if (regions[regionOf[i]].owner !== p.color) continue;
+      if (p.board.dead[i] !== 1) continue;
+      if (p.color !== null && (p.board.cells[i] === p.color || regions[regionOf[i]].owner !== p.color)) continue;
       if (p.capture(i)) return { kind: "capture", point: i };
     }
     p.updatePhase();
@@ -63,63 +66,69 @@ export class Cpu {
 
   private arrange(): CpuAction {
     const p = this.player;
-    const color = this.assigned;
     const board = p.board;
-    // 担当の地に、相手が取り上げる死に石が残っている間は待つ
     const { regions, regionOf } = analyze(board);
-    for (let i = 0; i < board.cells.length; i++) {
-      if (board.dead[i] === 1 && regions[regionOf[i]].owner === color) return { kind: "idle" };
-    }
-
-    const plan = this.validPlan();
-    if (!plan) return { kind: "idle" };
-    const { sinks, sources } = this.diff(plan);
-    if (sinks.length > 0) {
-      const sink = sinks[0];
-      if (sources.length > 0) {
-        const source = nearest(sources, sink, board.size);
-        if (p.pickUp([source])) return { kind: "pick", point: source };
-      } else if (p.pickFromTray(p.color!, 1)) {
-        return { kind: "pick-tray" };
+    for (const color of p.assigned) {
+      // 担当の地に、相手が取り上げる死に石が残っている間は待つ
+      for (let i = 0; i < board.cells.length; i++) {
+        if (board.dead[i] === 1 && regions[regionOf[i]].owner === color) return { kind: "idle" };
       }
-      this.layout = null; // 石が足りない: 計画を立て直す
-      return { kind: "idle" };
-    }
-    if (sources.length > 0) {
-      this.layout = null;
-      return { kind: "idle" };
+      const plan = this.validPlan(color);
+      if (!plan) return { kind: "idle" };
+      const { sinks, sources } = this.diff(plan);
+      if (sinks.length > 0) {
+        const sink = sinks[0];
+        if (sources.length > 0) {
+          const source = nearest(sources, sink, board.size);
+          if (p.pickUp([source])) return { kind: "pick", point: source };
+        } else if (p.pickFromTray(opponent(color), 1)) {
+          // color の石は、相手（opponent(color)）のトレイにある
+          return { kind: "pick-tray" };
+        }
+        this.layouts.set(color, null); // 石が足りない: 計画を立て直す
+        return { kind: "idle" };
+      }
+      if (sources.length > 0) {
+        this.layouts.set(color, null);
+        return { kind: "idle" };
+      }
     }
 
-    // 形が整った: 境界が閉じていて目数も正しければ完了する
-    const check = checkTerritory(p.position, color);
+    // すべての担当の地の形が整った: 境界が閉じていて目数も正しければ完了する
     const scores = p.scores();
-    if (check.complete && !p.boundaryOpen && scores[color] === p.initialScores[color]) {
-      const result = p.complete({ [color]: p.initialScores[color] });
-      if (result.ok) return { kind: "complete" };
+    const ready =
+      !p.boundaryOpen &&
+      p.assigned.every((c) => checkTerritory(p.position, c).complete && scores[c] === p.initialScores[c]);
+    if (ready) {
+      const answer: Partial<Record<Color, number>> = {};
+      for (const c of p.assigned) answer[c] = p.initialScores[c];
+      if (p.complete(answer).ok) return { kind: "complete" };
     }
     return { kind: "idle" };
   }
 
-  /** 持っている石を、次に埋める点に置く。埋める点がなければ元に戻す。 */
+  /** 持っている石を、その色の計画で次に埋める点に置く。埋める点がなければ元に戻す。 */
   private placeHeld(): CpuAction {
     const p = this.player;
-    const plan = this.validPlan();
+    const color = p.hand!.stones[0].color;
+    const plan = this.validPlan(color);
     const sinks = plan ? this.diff(plan).sinks : [];
-    if (sinks.length > 0 && p.placeAt(sinks[0], this.assigned)) return { kind: "place", point: sinks[0] };
+    if (sinks.length > 0 && p.placeAt(sinks[0], color)) return { kind: "place", point: sinks[0] };
     p.cancel();
     return { kind: "idle" };
   }
 
-  /** 計画が今の盤で使えるか確かめ、使えなければ立て直す。 */
-  private validPlan(): Layout | null {
+  /** color の地の計画が今の盤で使えるか確かめ、使えなければ立て直す。 */
+  private validPlan(color: Color): Layout | null {
     const board = this.player.board;
-    const color = this.assigned;
     const usable = (layout: Layout) =>
       [...layout.area].every((i) => board.cells[i] === EMPTY || (board.cells[i] === color && board.isLiveStone(i)));
-    if (this.layout && usable(this.layout)) return this.layout;
+    const current = this.layouts.get(color);
+    if (current && usable(current)) return current;
     const held = this.player.hand?.stones.filter((s) => s.color === color).length ?? 0;
-    this.layout = planLayout(board, color, this.player.position.trays[this.player.color!] + held, 20_000);
-    return this.layout;
+    const layout = planLayout(board, color, this.player.position.trays[opponent(color)] + held, 20_000);
+    this.layouts.set(color, layout);
+    return layout;
   }
 
   /** 計画と比べて、石を置く点（sinks）と石を取る点（sources）。 */

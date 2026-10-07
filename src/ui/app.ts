@@ -57,30 +57,56 @@ function showSettings(root: HTMLElement, settings: Settings): void {
   root.replaceChildren(
     h("main", { class: "settings" }, [
       h("h1", {}, ["囲碁スピード整地バトル"]),
-      radioGroup("モード", "mode", [
-        { value: "solo", label: "ひとりで", checked: settings.mode === "solo" },
-        { value: "cpu", label: "vs CPU", checked: settings.mode === "cpu" },
-      ]),
-      h("p", { class: "lead", id: "mode-lead" }, []),
+      radioGroup(
+        "モード",
+        "mode",
+        [
+          { value: "solo", label: "ひとりで", checked: settings.mode === "solo" },
+          { value: "cpu", label: "vs CPU", checked: settings.mode === "cpu" },
+        ],
+        "ひとりで: 黒地と白地を両方整地して、タイムを競います。\nvs CPU: 相手の地を整地します。ペナルティ込みのタイムが短い方が勝ちです。",
+      ),
       h("div", { class: "cpu-settings" }, [
-        radioGroup("自分の石", "my-color", [
-          { value: "black", label: "黒（白地を整地）", checked: settings.myColor === BLACK },
-          { value: "white", label: "白（黒地を整地）", checked: settings.myColor === WHITE },
-        ]),
-        radioGroup("CPU の強さ", "cpu-level", [
-          { value: "easy", label: "やさしい", checked: settings.cpuLevel === "easy" },
-          { value: "normal", label: "ふつう", checked: settings.cpuLevel === "normal" },
-          { value: "hard", label: "つよい", checked: settings.cpuLevel === "hard" },
-        ]),
-        radioGroup("担当外の石の操作", "restricted", [
-          { value: "on", label: "制限あり", checked: settings.restricted },
-          { value: "off", label: "制限なし", checked: !settings.restricted },
-        ]),
+        radioGroup(
+          "自分の石",
+          "my-color",
+          [
+            { value: "black", label: "黒（白地を整地）", checked: settings.myColor === BLACK },
+            { value: "white", label: "白（黒地を整地）", checked: settings.myColor === WHITE },
+          ],
+          "囲碁の慣例どおり、相手の地を整地します。白のときは盤を 180° 回して表示します。",
+        ),
+        radioGroup(
+          "CPU の強さ",
+          "cpu-level",
+          [
+            { value: "easy", label: "やさしい", checked: settings.cpuLevel === "easy" },
+            { value: "normal", label: "ふつう", checked: settings.cpuLevel === "normal" },
+            { value: "hard", label: "つよい", checked: settings.cpuLevel === "hard" },
+          ],
+          "CPU が 1 回操作する間隔です（やさしい 2.5 秒、ふつう 1.5 秒、つよい 0.8 秒）。",
+        ),
+        radioGroup(
+          "担当外の石の操作",
+          "restricted",
+          [
+            { value: "on", label: "制限あり", checked: settings.restricted },
+            { value: "off", label: "制限なし", checked: !settings.restricted },
+          ],
+          "担当外の石とは、あなたが整地しない側の石です。vs CPU では、あなたは CPU の地を、CPU はあなたの地を整地します。\n" +
+            "制限あり: 動かせるのは相手の色の石（整地する地の石と、自分の地の中の相手の死に石）だけです。CPU が整地しているあなたの地には石を置けません。\n" +
+            "制限なし: どの石も動かせます（CPU の整地を邪魔することもできます）。",
+        ),
       ]),
-      radioGroup("終局図", "source", [
-        { value: "katago", label: "KataGo で作る", checked: !settings.record },
-        { value: "sgf", label: "SGF を読み込む", checked: !!settings.record },
-      ]),
+      radioGroup(
+        "終局図",
+        "source",
+        [
+          { value: "katago", label: "自動で作る", checked: !settings.record },
+          { value: "sgf", label: "SGF を読み込む", checked: !!settings.record },
+        ],
+        "自動で作る: KataGo の自動対局でその場で作ります。初回はネットワーク（約 4 MB）を読み込みます。\nSGF を読み込む: 終局済みの実戦の棋譜で遊びます。",
+      ),
       h("fieldset", { class: "radio-group sgf-group" }, [
         h("legend", {}, ["SGF ファイル（終局済みの棋譜）"]),
         h("input", { type: "file", id: "sgf-file", accept: ".sgf,application/x-go-sgf" }, []),
@@ -91,21 +117,30 @@ function showSettings(root: HTMLElement, settings: Settings): void {
         { value: "13", label: "13 路", checked: settings.size === 13 },
         { value: "9", label: "9 路", checked: settings.size === 9 },
       ]),
-      radioGroup("開始時の表示", "start", [
-        { value: "final", label: "終局図から", checked: !settings.replay },
-        { value: "replay", label: "初手から並べる", checked: settings.replay },
-      ]),
-      radioGroup("ペナルティ時の石", "undo", [
-        { value: "undo", label: "元に戻す", checked: settings.undoOnPenalty },
-        { value: "keep", label: "そのまま（印を付ける）", checked: !settings.undoOnPenalty },
-      ]),
+      radioGroup(
+        "開始時の表示",
+        "start",
+        [
+          { value: "final", label: "終局図から", checked: !settings.replay },
+          { value: "replay", label: "初手から並べる", checked: settings.replay },
+        ],
+        "初手から並べる: 棋譜を 10 秒で再生してから整地を始めます。",
+      ),
+      radioGroup(
+        "ペナルティ時の石",
+        "undo",
+        [
+          { value: "undo", label: "元に戻す", checked: settings.undoOnPenalty },
+          { value: "keep", label: "そのまま（印を付ける）", checked: !settings.undoOnPenalty },
+        ],
+        "地の目数が変わる置き方をすると、+5 秒のペナルティになります（例: アゲハマを相手の地に置いた、境界を崩したまま閉じた）。\n" +
+          "元に戻す: ペナルティになった石を、自動で元の場所に戻します。\n" +
+          "そのまま: 石は動かさず、間違えた場所に×印を付けます。自分で直すと印は消えます。",
+      ),
       h("fieldset", { class: "radio-group seed-group" }, [
-        h("legend", {}, ["シード"]),
+        legendWithHelp("シード", "同じ盤サイズとシードなら同じ終局図になります。画面を開くたびにランダムな値が入ります。"),
         h("input", { type: "text", id: "seed", value: settings.seed, spellcheck: "false", autocomplete: "off" }, []),
         h("button", { type: "button", id: "reseed" }, ["別のシード"]),
-      ]),
-      h("p", { class: "note" }, [
-        "終局図は KataGo の自動対局でその場で作ります。同じ盤サイズとシードなら同じ終局図になります。初回はネットワーク（約 4 MB）を読み込みます。",
       ]),
       h("button", { id: "start-button", class: "primary" }, ["スタート"]),
       h("p", { class: "links" }, [h("a", { href: "https://github.com/kos59125/go-ssb/blob/main/docs/rulebook.md", target: "_blank" }, ["ルールブック"])]),
@@ -119,24 +154,16 @@ function showSettings(root: HTMLElement, settings: Settings): void {
   const isCpu = () => selected("mode") === "cpu";
   const updateMode = () => {
     root.querySelector<HTMLElement>(".cpu-settings")!.hidden = !isCpu();
-    root.querySelector("#mode-lead")!.textContent = isCpu()
-      ? "vs CPU：相手の地を整地します。ペナルティ込みのタイムが短い方が勝ちです。"
-      : "ひとりで：黒地と白地を両方整地して、タイムを競います。";
   };
   for (const input of root.querySelectorAll<HTMLInputElement>('input[name="mode"]')) {
-    input.addEventListener("change", () => {
-      updateMode();
-      prefetch();
-    });
+    input.addEventListener("change", updateMode);
   }
-  // SGF のときは、盤のサイズとシードは棋譜で決まるので選べない
+  // SGF のときは、盤のサイズとシードは棋譜で決まるので表示しない
   const updateSource = () => {
     const sgf = selected("source") === "sgf";
     root.querySelector<HTMLElement>(".sgf-group")!.hidden = !sgf;
-    root.querySelector<HTMLFieldSetElement>(".seed-group")!.disabled = sgf;
-    for (const input of root.querySelectorAll<HTMLInputElement>('input[name="size"]')) {
-      input.disabled = sgf || (small && input.value === "19");
-    }
+    root.querySelector<HTMLElement>(".seed-group")!.hidden = sgf;
+    root.querySelector<HTMLElement>('input[name="size"]')!.closest("fieldset")!.hidden = sgf;
     startButton.disabled = sgf && !record;
   };
   for (const input of root.querySelectorAll<HTMLInputElement>('input[name="source"]')) {
@@ -160,7 +187,7 @@ function showSettings(root: HTMLElement, settings: Settings): void {
   // 設定を選んでいる間に、裏で終局図を作っておく
   function prefetch() {
     if (!dummySeed() && seedInput.value.trim()) {
-      generator.prefetch(Number(selected("size")), seedNumber(seedInput.value), isCpu());
+      generator.prefetch(Number(selected("size")), seedNumber(seedInput.value), true);
     }
   }
   updateMode();
@@ -207,7 +234,8 @@ async function prepareGame(root: HTMLElement, settings: Settings): Promise<void>
     return;
   }
 
-  const forCpu = settings.mode === "cpu";
+  // ギブアップで CPU が整地できるよう、ひとりでモードでも CPU が整地できる局面を作る
+  const forCpu = true;
   const status = h("p", { class: "lead" }, [
     settings.record ? "棋譜を読み込んで、死に石を判定しています…" : "ネットワークを読み込んでいます…",
   ]);
@@ -239,7 +267,7 @@ async function prepareGame(root: HTMLElement, settings: Settings): Promise<void>
   }
   if (cancelled) return;
   // 実戦の棋譜は作り直せないので、CPU が整地できる形が見つからなければ vs CPU では遊べない
-  if (forCpu && !game.layouts?.[settings.myColor]) {
+  if (settings.mode === "cpu" && !game.layouts?.[settings.myColor]) {
     status.textContent = "この棋譜は、CPU が整地できる形が見つかりませんでした。ひとりでモードで遊んでください。";
     return;
   }
@@ -323,7 +351,7 @@ function showGame(
     const match = new Match(position, { undoOnPenalty: settings.undoOnPenalty });
     session = new Player(match, { color: myColor, restricted: settings.restricted });
     // CPU は人の地（myColor の地）を整地する
-    cpu = new Cpu(new Player(match, { color: cpuColor }), layouts?.[myColor] ?? null);
+    cpu = new Cpu(new Player(match, { color: cpuColor }), layouts ?? {});
   } else {
     session = new Session(position, { undoOnPenalty: settings.undoOnPenalty });
   }
@@ -348,8 +376,12 @@ function showGame(
   ]);
   const ghost = h("div", { class: "ghost" }, []);
   // CPU のカーソル（vs CPU では常に表示する）
-  const cpuCursor = h("div", { class: "cpu-cursor" }, [h("span", { class: "cpu-cursor-label" }, ["CPU"])]);
+  const cpuCursor = makeCursor("CPU");
   cpuCursor.hidden = !cpuMode;
+  // ギブアップ後に代わりに整地する CPU のカーソル
+  const autoCursor = makeCursor("おまかせ");
+  autoCursor.classList.add("auto");
+  autoCursor.hidden = true;
   const trays = {
     [BLACK]: trayElement(BLACK, cpuMode ? (myColor === BLACK ? "あなた" : "CPU") : undefined),
     [WHITE]: trayElement(WHITE, cpuMode ? (myColor === WHITE ? "あなた" : "CPU") : undefined),
@@ -359,6 +391,8 @@ function showGame(
   // ひとりでモード: 終局図からやり直す（タイマーとペナルティは続く）
   const resetButton = h("button", { type: "button" }, ["最初からやり直す"]);
   resetButton.hidden = cpuMode;
+  // ギブアップ: CPU が代わりに整地する
+  const giveUpButton = h("button", { type: "button" }, ["ギブアップ"]);
   // 目数の入力欄は最初から出しておく（仕様書 §2.6）。vs CPU では担当の地だけ
   const blackInput = h("input", { type: "number", step: "1", required: "", inputmode: "numeric" }, []);
   const whiteInput = h("input", { type: "number", step: "1", required: "", inputmode: "numeric" }, []);
@@ -366,7 +400,7 @@ function showGame(
   const scoreForm = h("form", { class: "score-form" }, [
     h("div", { class: "score-inputs" }, session.assigned.map((c) => h("label", {}, [`${colorName(c)}地`, inputs[c], "目"]))),
     h("p", { class: "note" }, ["アゲハマが地より多いときはマイナスで入力します。"]),
-    h("div", { class: "buttons" }, [h("button", { class: "primary" }, ["完了"]), resetButton, quitButton]),
+    h("div", { class: "buttons" }, [h("button", { class: "primary" }, ["完了"]), resetButton, giveUpButton, quitButton]),
   ]);
   for (const input of [blackInput, whiteInput]) {
     input.addEventListener("input", () => input.classList.remove("wrong"));
@@ -406,6 +440,7 @@ function showGame(
     ]),
     ghost,
     cpuCursor,
+    autoCursor,
   );
 
   let drag: Drag = null;
@@ -417,6 +452,8 @@ function showGame(
   let toastTimer = 0;
   // 人の操作を受け付けるか（完了した後や、勝敗が決まった後は受け付けない）
   let accepting = true;
+  // ギブアップした時点のタイム。ギブアップした後はタイムを止めて表示する
+  let gaveUpAt: number | null = null;
 
   const flash = (text: string) => {
     message.textContent = text;
@@ -433,7 +470,7 @@ function showGame(
 
   const render = () => {
     view.render(session.board, session.marks, session.hand?.origins ?? [], errorMarks);
-    if (session.phase !== "finished") {
+    if (session.phase !== "finished" && gaveUpAt === null) {
       const removal = cpuMode
         ? `① 死に石取り：自分の地（${colorName(myColor)}地）の中の死に石をアゲハマへ（残り ${countDeadStones(session)} 個）`
         : `① 死に石取り：死に石をアゲハマトレイへ（残り ${countDeadStones(session)} 個）`;
@@ -672,7 +709,7 @@ function showGame(
   document.addEventListener("pointerup", onUp);
   document.addEventListener("keydown", onKey);
   document.addEventListener("contextmenu", onContextMenu);
-  const updateTimer = () => (timer.textContent = formatTime(session.elapsed()));
+  const updateTimer = () => (timer.textContent = formatTime(gaveUpAt ?? session.elapsed()));
   const tick = window.setInterval(() => {
     updateTimer();
     if (cpuMode) {
@@ -705,6 +742,66 @@ function showGame(
   const leave = () => {
     cleanup();
     cpuCursor.remove();
+    autoCursor.remove();
+  };
+
+  giveUpButton.addEventListener("click", () => {
+    if (!session.started || !accepting) return;
+    if (!window.confirm("ギブアップしますか？ CPU があなたの代わりに整地します。")) return;
+    gaveUpAt = session.elapsed();
+    stopInput();
+    errorMarks = new Set();
+    for (const input of [blackInput, whiteInput]) input.disabled = true;
+    scoreForm.querySelector(".buttons")?.remove();
+    colorPicker.hidden = true;
+    message.textContent = "";
+    // 自分の操作をすべて元に戻し、CPU が代わりに死に石取りから整地する
+    session.revertAll();
+    if (cpuMode) decided = true;
+    phaseLabel.textContent = cpuMode ? "ギブアップ（CPU の勝ち）。CPU が代わりに整地しています…" : "ギブアップ。CPU が代わりに整地しています…";
+    showGiveUpResult();
+    const auto = new Cpu(session, layouts ?? {});
+    autoCursor.hidden = false;
+    moveCursor(autoCursor, auto, null, session.color ?? BLACK);
+    let idle = 0;
+    const autoTimer = window.setInterval(() => {
+      const action = auto.step();
+      moveCursor(autoCursor, auto, action, session.color ?? BLACK);
+      render();
+      if (session.phase === "finished") {
+        window.clearInterval(autoTimer);
+        phaseLabel.textContent = cpuMode ? "ギブアップ（CPU の勝ち）" : "ギブアップ";
+        root.querySelector(".game")!.classList.add("finished");
+        return;
+      }
+      // 相手の死に石取りを待つ間を除き、手が止まったままなら整地できなかったとみなす
+      idle = action.kind === "idle" && !(cpuPlayer && cpuPlayer.phase === "removal") ? idle + 1 : 0;
+      if (idle > 20) {
+        window.clearInterval(autoTimer);
+        phaseLabel.textContent = "ギブアップ。この局面は CPU が整地できませんでした。";
+      }
+    }, 350);
+    cleanups.push(() => window.clearInterval(autoTimer));
+    render();
+  });
+
+  /** ギブアップしたときの結果表示（答えの目数と、もう一度・設定に戻る）。 */
+  const showGiveUpResult = () => {
+    const again = h("button", { class: "primary" }, ["もう一度"]);
+    const back = h("button", {}, ["設定に戻る"]);
+    again.addEventListener("click", () => {
+      leave();
+      void prepareGame(root, { ...settings, seed: nextSeed });
+    });
+    back.addEventListener("click", () => {
+      leave();
+      showSettings(root, { ...settings, seed: nextSeed });
+    });
+    resultBox.replaceChildren(
+      h("p", {}, [`黒 ${session.initialScores[BLACK]} 目・白 ${session.initialScores[WHITE]} 目`]),
+      h("div", { class: "buttons" }, [again, back]),
+    );
+    resultBox.hidden = false;
   };
 
   resetButton.addEventListener("click", () => {
@@ -828,29 +925,36 @@ function showGame(
   let cpuWaiting = false;
   /** CPU のカーソルを、操作した点（またはトレイ）へ動かす。 */
   const moveCpuCursor = (action: CpuAction | null) => {
-    if (!cpu) return;
+    if (cpu) moveCursor(cpuCursor, cpu, action, cpuColor);
+  };
+  const moveCursor = (cursor: HTMLElement, cpu: Cpu, action: CpuAction | null, trayOwner: Color) => {
     let target: { x: number; y: number } | null = null;
     if (action && "point" in action) {
       const box = view.svg.getBoundingClientRect();
       const { x, y } = view.pointBox(action.point);
       target = { x: box.left + x, y: box.top + y };
     } else if (action?.kind === "pick-tray") {
-      const box = trays[cpuColor].view.svg.getBoundingClientRect();
+      // どちらのトレイから持ったかは、持っている石の色で決まる
+      const held = cpu.player.hand?.stones.at(-1);
+      const owner = held ? opponent(held.color) : trayOwner;
+      const box = trays[owner].view.svg.getBoundingClientRect();
       target = { x: box.left + 20, y: box.top + 15 };
-    } else if (!cpuCursor.style.transform) {
+    } else if (!cursor.style.transform) {
       const box = view.svg.getBoundingClientRect();
       target = { x: box.left + box.width / 2, y: box.top + box.height / 2 };
     }
-    if (target) cpuCursor.style.transform = `translate(${target.x}px, ${target.y}px)`;
+    if (target) cursor.style.transform = `translate(${target.x}px, ${target.y}px)`;
     const held = cpu.player.hand?.stones[0];
-    cpuCursor.classList.toggle("holding-black", held?.color === BLACK);
-    cpuCursor.classList.toggle("holding-white", held?.color === WHITE);
+    cursor.classList.toggle("holding-black", held?.color === BLACK);
+    cursor.classList.toggle("holding-white", held?.color === WHITE);
   };
 
   const startCpu = () => {
     if (!cpu) return;
     const timer = window.setInterval(() => {
-      if (decided) return;
+      // 勝敗が決まったら止める（ギブアップのときは、盤を仕上げるために最後まで続ける）
+      if (decided && gaveUpAt === null) return;
+      if (cpu!.player.phase === "finished") return;
       const before = session.penalties;
       const action = cpu!.step();
       cpuWaiting = action.kind === "idle" && cpu!.player.phase === "arrange";
@@ -891,6 +995,22 @@ function showGame(
   cleanups.push(() => window.clearInterval(countdownTimer));
 }
 
+/** 見出しと「?」。「?」にマウスを乗せるかフォーカスすると、右に説明の吹き出しを出す。 */
+function legendWithHelp(text: string, help: string): HTMLLegendElement {
+  return h("legend", {}, [
+    text,
+    h("span", { class: "help", tabindex: "0", role: "button", "aria-label": `${text}の説明` }, [
+      "?",
+      h("span", { class: "help-bubble", role: "tooltip" }, [help]),
+    ]),
+  ]);
+}
+
+/** CPU のカーソル（矢印と名前）。 */
+function makeCursor(label: string): HTMLDivElement {
+  return h("div", { class: "cpu-cursor" }, [h("span", { class: "cpu-cursor-label" }, [label])]);
+}
+
 /** 棋譜の説明（対局者・盤サイズ・手数）。結果は答えになるので出さない。 */
 function recordLabel(record: GameRecord): string {
   const players = record.black || record.white ? `${record.black ?? "?"}（黒）− ${record.white ?? "?"}（白）` : "対局者不明";
@@ -902,9 +1022,10 @@ function radioGroup(
   legend: string,
   name: string,
   options: { value: string; label: string; checked: boolean; disabled?: boolean }[],
+  help?: string,
 ): HTMLFieldSetElement {
   return h("fieldset", { class: "radio-group" }, [
-    h("legend", {}, [legend]),
+    help ? legendWithHelp(legend, help) : h("legend", {}, [legend]),
     ...options.map((o) =>
       h("label", {}, [
         h("input", {

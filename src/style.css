@@ -14,6 +14,11 @@
   box-sizing: border-box;
 }
 
+/* display を指定した要素でも hidden 属性で確実に隠す */
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   background: var(--bg);
@@ -668,4 +673,103 @@ body.holding .tray {
 .cpu-cursor.holding-white::after {
   background: #fafafa;
   border: 1px solid #555;
+}
+
+/* ギブアップ後に代わりに整地する CPU のカーソル */
+.cpu-cursor.auto::before {
+  border-left-color: #b5452b;
+  border-top-color: #b5452b;
+}
+
+.cpu-cursor.auto .cpu-cursor-label {
+  background: #b5452b;
+}
+
+/* ギブアップ後に代わりに整地する CPU のカーソル */
+.cpu-cursor.auto::before {
+  border-left-color: #b5452b;
+  border-top-color: #b5452b;
+}
+
+.cpu-cursor.auto .cpu-cursor-label {
+  background: #b5452b;
+}
+
+/* 設定の説明: 見出しの「?」に重ねると、項目の枠の右外側に吹き出しを出す */
+.radio-group {
+  position: relative;
+}
+
+.help {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--border);
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: bold;
+  cursor: help;
+  vertical-align: 1px;
+}
+
+.help-bubble {
+  position: absolute;
+  left: calc(100% + 14px);
+  top: 50%;
+  transform: translateY(-50%);
+  width: 280px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--fg);
+  color: #fff;
+  font-size: 13px;
+  font-weight: normal;
+  line-height: 1.5;
+  white-space: pre-line;
+  text-align: left;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.25);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.15s;
+  z-index: 10;
+}
+
+.help-bubble::before {
+  content: "";
+  position: absolute;
+  right: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  border: 7px solid transparent;
+  border-right-color: var(--fg);
+}
+
+.help:hover .help-bubble,
+.help:focus .help-bubble {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* 狭い画面では右に出す余白がないので、項目の枠の下に出す */
+@media (max-width: 768px) {
+  .help-bubble {
+    left: 0;
+    right: 0;
+    top: calc(100% + 10px);
+    transform: none;
+    width: auto;
+  }
+
+  .help-bubble::before {
+    right: auto;
+    left: 24px;
+    top: auto;
+    bottom: 100%;
+    transform: none;
+    border-right-color: transparent;
+    border-bottom-color: var(--fg);
+  }
 }

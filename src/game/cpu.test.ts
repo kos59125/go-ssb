@@ -3,6 +3,7 @@ import { BLACK, Board, WHITE } from "../core/board";
 import { Cpu } from "./cpu";
 import { planLayouts } from "./layout";
 import { Match, Player } from "./match";
+import { Session } from "./session";
 
 /**
  * 11 路。左上 5x5 が黒地（白の死に石 (1,1)）、右下 5x5 が白地（黒の死に石 (8,8)）、
@@ -28,7 +29,7 @@ function setup(humanColor: typeof BLACK | typeof WHITE) {
   const human = new Player(match, { color: humanColor, restricted: true });
   const cpuPlayer = new Player(match, { color: humanColor === BLACK ? WHITE : BLACK });
   const layouts = planLayouts(position);
-  const cpu = new Cpu(cpuPlayer, layouts[cpuPlayer.color === BLACK ? WHITE : BLACK]);
+  const cpu = new Cpu(cpuPlayer, layouts);
   match.begin();
   return { match, human, cpuPlayer, cpu, tick: (ms: number) => (t += ms) };
 }
@@ -76,5 +77,19 @@ describe("Cpu", () => {
     expect(human.canUseTray(WHITE)).toBe(false);
     // 自分の地（黒地、CPU が整地する）には置けない
     expect(human.canPlace(0)).toBe(false);
+  });
+
+  it("ひとりでモードのおまかせ（ギブアップ）: 黒地・白地の両方を整地して完了する", () => {
+    const position = { board: makeBoard(), trays: { [BLACK]: 4, [WHITE]: 4 } };
+    const session = new Session(position, { undoOnPenalty: true });
+    session.begin();
+    const auto = new Cpu(session, planLayouts(position));
+    let steps = 0;
+    while (session.phase !== "finished" && steps < 300) {
+      auto.step();
+      steps++;
+    }
+    expect(session.phase).toBe("finished");
+    expect(session.penalties).toBe(0);
   });
 });

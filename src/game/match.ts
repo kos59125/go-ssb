@@ -211,6 +211,8 @@ export class Player {
   finishedAt: number | null = null;
   /** 死に石取りで、死に石でないために元に戻した石の点（演出用）。読んだら clearRejected で消す。 */
   rejected: { point: number; color: Color }[] = [];
+  /** 開始から自分が動かした石（元に戻した分は逆向きの移動として記録）。ギブアップで巻き戻す。 */
+  private history: Move[] = [];
   /** 境界が開いてから自分が動かした石。 */
   private pending = { moves: [] as Move[], placed: [] as number[], origins: [] as number[], carriedMark: false };
 
@@ -462,6 +464,21 @@ export class Player {
     return { ok: true };
   }
 
+  /**
+   * 自分が開始から動かした石をすべて元に戻す（ギブアップ用）。ほかのプレイヤーの操作には触れない。
+   * フェーズは死に石取りからやり直す。
+   */
+  revertAll(): void {
+    this.cancel();
+    const history = this.history;
+    this.history = [];
+    this.undo(history);
+    this.history = [];
+    this.marks.clear();
+    this.restartPhase();
+    if (!this.boundaryOpen) this.match.markSettled();
+  }
+
   clearPending(): void {
     this.pending = { moves: [], placed: [], origins: [], carriedMark: false };
   }
@@ -486,6 +503,7 @@ export class Player {
    *   目数が変わっていたら、境界を閉じたプレイヤーのペナルティとする。
    */
   private settle(hand: Hand): void {
+    this.history.push(...hand.moves);
     if (this.phase === "removal") {
       this.settleRemoval(hand);
       return;
@@ -581,7 +599,9 @@ export class Player {
         board.set(m.from.point % board.size, Math.floor(m.from.point / board.size), m.color, m.dead);
       } else {
         left.push({ color: m.color, dead: m.dead, source: m.from });
+        continue;
       }
+      this.history.push({ color: m.color, dead: m.dead, from: m.to, to: m.from });
     }
     if (left.length > 0) {
       const hand = this.ensureHand();

@@ -58,6 +58,24 @@ describe("Session", () => {
     expect(s.elapsed()).toBe(3000 + 5000);
   });
 
+  it("ギブアップ用に、自分の操作をすべて巻き戻せる（ペナルティで戻した分も含む）", () => {
+    const { s } = session(false, { [BLACK]: 2, [WHITE]: 0 });
+    const initial = s.board.cells.slice();
+    removeDead(s);
+    s.pickFromTray(BLACK);
+    s.placeAt(s.board.index(8, 8)); // 白地にアゲハマ（正しい）
+    s.pickFromTray(BLACK);
+    s.placeAt(s.board.index(0, 0)); // 黒地にアゲハマ（誤り、印）
+    s.pickUp([s.board.index(4, 0)]); // 持ったまま
+    s.revertAll();
+    expect(s.hand).toBeNull();
+    expect([...s.board.cells]).toEqual([...initial]);
+    expect(s.board.isDead(2, 1)).toBe(true);
+    expect(s.position.trays).toEqual({ [BLACK]: 2, [WHITE]: 0 });
+    expect(s.phase).toBe("removal");
+    expect(s.marks.size).toBe(0);
+  });
+
   it("合図の前はタイムが進まない", () => {
     let t = 0;
     const s = new Session({ board: parseBoard(BOARD), trays: { [BLACK]: 0, [WHITE]: 0 } }, { undoOnPenalty: true, now: () => t });
