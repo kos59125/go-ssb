@@ -198,5 +198,23 @@ describe("Cpu", () => {
     expect(cpuPlayer.phase).toBe("finished");
     expect(maxHand).toBe(2);
   });
+
+  it("decide は盤やトレイを変えず、run で初めて石を動かす（カーソルが着いてから動かすため）", () => {
+    for (const level of Object.keys(CPU_LEVELS) as CpuLevel[]) {
+      const { human, cpuPlayer, cpu, match } = setup(BLACK, level, 3, false);
+      human.capture(1 * 11 + 1);
+      for (let steps = 0; cpuPlayer.phase !== "finished" && steps < 1000; steps++) {
+        const cells = Array.from(match.board.cells);
+        const trays = { ...match.position.trays };
+        const held = cpuPlayer.hand?.stones.length ?? 0;
+        const plan = cpu.decide();
+        expect(Array.from(match.board.cells)).toEqual(cells);
+        expect(match.position.trays).toEqual(trays);
+        expect(cpuPlayer.hand?.stones.length ?? 0).toBe(held);
+        plan.run?.();
+      }
+      expect(cpuPlayer.phase, level).toBe("finished");
+    }
+  });
 });
 

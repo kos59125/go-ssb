@@ -1,5 +1,12 @@
 import { Position, analyze } from "../core/analysis";
 import { BLACK, Board, Color, EMPTY, WHITE, opponent } from "../core/board";
+import { DEFAULT_SHAPE_RULES, HOLE_PATTERNS, ShapeRules, isFiveByOdd } from "../core/shapes";
+
+/**
+ * CPU が 1 列の区間を避ける目数。この目数以上の区間は、まず 2 列以上の形（2x5、3x4−2、余りなら 2x2+1、3x3 など）
+ * で探し、見つからないときだけ設定で許される 1 列の形も使う。
+ */
+const PREFERRED_ONE_LINE_FROM = 5;
 
 /** 整地の目標の形。 */
 export interface Layout {
@@ -15,8 +22,10 @@ export interface Layout {
  * - 動かしてよい範囲は、color の地の点と、相手の石や地以外の空点に接していない color の石。
  *   境界の石は動かさないので、整地の途中で境界が開くことはない。
  * - 範囲の中で石の数は保存されるので、整地後の空点の数は「今の空点 − 埋めるアゲハマ」になる。
- * - 区間は矩形（10 の倍数）と、余りの区間（矩形、または奇数のときしっぽ付きの矩形）。
- *   区間どうしは辺で接しないようにする（頂点だけで接するのは可）。
+ * - 区間は矩形（10 の倍数）、中に石を置く形（3x4−2、7x3−1、7x6−2）と、余りの区間（矩形、または奇数のとき
+ *   しっぽ付きの矩形）。区間どうしは辺で接しないようにする（頂点だけで接するのは可）。
+ * - 5 目以上の区間は、まず 1 列の形（1x10、1x7 など）を使わずに探す。見つからなければ、rules で許される
+ *   範囲で 1 列の形も使う。
  *
  * 地に死に石が残っているときや、形が見つからないときは null。
  *
@@ -32,7 +41,7 @@ export interface SerializedLayout {
  * 死に石をすべて取り上げた後の局面で、黒地・白地それぞれの整地の形を探す（vs CPU 用）。
  * 見つからない色は null。
  */
-export function planLayouts(position: Position): Record<Color, SerializedLayout | null> {
+export function planLayouts(position: Position, rules: ShapeRules = DEFAULT_SHAPE_RULES): Record<Color, SerializedLayout | null> {
   const board = position.board.clone();
   const trays = { ...position.trays };
   for (let i = 0; i < board.cells.length; i++) {
@@ -43,13 +52,19 @@ export function planLayouts(position: Position): Record<Color, SerializedLayout 
   }
   const result = {} as Record<Color, SerializedLayout | null>;
   for (const color of [BLACK, WHITE] as const) {
-    const layout = planLayout(board, color, trays[opponent(color)]);
+    const layout = planLayout(board, color, trays[opponent(color)], undefined, rules);
     result[color] = layout ? { area: [...layout.area], empties: [...layout.empties] } : null;
   }
   return result;
 }
 
-export function planLayout(board: Board, color: Color, prisoners: number, maxNodes = 200_000): Layout | null {
+export function planLayout(
+  board: Board,
+  color: Color,
+  prisoners: number,
+  maxNodes = 200_000,
+  rules: ShapeRules = DEFAULT_SHAPE_RULES,
+): Layout | null {
   const { regions } = analyze(board);
   const area = new Set<number>();
   for (const region of regions) {
@@ -70,12 +85,21 @@ export function planLayout(board: Board, color: Color, prisoners: number, maxNod
   const target = Math.max(0, emptiesNow - prisoners);
   if (target === 0) return { area, empties: new Set() };
 
-  const solver = new Solver(board, area, target, maxNodes);
-  const empties = solver.solve();
-  return empties ? { area, empties } : null;
+  // まず 1 列の形を避けて探し、見つからなければ設定で許される範囲で 1 列の形も使う
+  const allowed = rules.oneLineFrom ?? Infinity;
+  const passes = allowed > PREFERRED_ONE_LINE_FROM ? [PREFERRED_ONE_LINE_FROM, allowed] : [allowed];
+  for (const oneLineFrom of passes) {
+    const empties = new Solver(board, area, target, maxNodes, oneLineFrom, rules.allowFiveByOdd).solve();
+    if (empties) return { area, empties };
+  }
+  return null;
 }
 
-type Shape = [number, number][];
+/** 区間の形。cells は空点、holes は中に置く石（3x4−2 などの形だけ）。行優先で最初の空点が原点。 */
+interface Shape {
+  cells: [number, number][];
+  holes: [number, number][];
+}
 
 class Solver {
   private readonly n: number;
@@ -83,33 +107,65 @@ class Solver {
   /** 0: 未定、1: 石、2: 空点（区間）。 */
   private readonly state: Uint8Array;
   private readonly target: number;
-  private readonly remainder: number;
   private nodes = 0;
+  /** 10 の倍数（と、認めるときは 5 × 奇数）の区間の形（目数ごと、使いたい順）。 */
+  private readonly multiples = new Map<number, Shape[]>();
+  /** 余りの区間の形（目数 1〜9 ごと、使いたい順）。 */
+  private readonly remainders = new Map<number, Shape[]>();
 
+  /** @param oneLineFrom この目数以上の区間は 1 列の形にしない */
   constructor(
     private readonly board: Board,
     private readonly area: Set<number>,
     target: number,
     private readonly maxNodes: number,
+    oneLineFrom: number,
+    private readonly fiveByOdd: boolean,
   ) {
     this.n = board.size;
     this.cells = [...area].sort((a, b) => a - b);
     this.state = new Uint8Array(board.cells.length);
     this.target = target;
-    this.remainder = target % 10;
+    const max = this.n;
+    if (fiveByOdd) {
+      for (let size = 15; size <= target; size += 10) {
+        const shapes = rectangles(size, max).filter(([w, h]) => isFiveByOdd(w, h)).map(([w, h]) => rect(w, h));
+        if (shapes.length > 0) this.multiples.set(size, shapes);
+      }
+    }
+    for (let size = 10; size <= target; size += 10) {
+      // 2 列以上の矩形 → 中に石を置く形 → 1 列の矩形（許されるときだけ）
+      const rects = rectangles(size, max);
+      const wide = rects.filter(([w, h]) => w > 1 && h > 1).map(([w, h]) => rect(w, h));
+      const holes = HOLE_PATTERNS.filter((pt) => pt.w * pt.h - pt.holes.length === size && pt.w <= max && pt.h <= max).map(
+        (pt) => withHoles(pt.w, pt.h, pt.holes),
+      );
+      const thin = size < oneLineFrom ? rects.filter(([w, h]) => w === 1 || h === 1).map(([w, h]) => rect(w, h)) : [];
+      this.multiples.set(size, [...wide, ...holes, ...thin]);
+    }
+    for (let r = 1; r <= 9; r++) {
+      const thinOk = r < oneLineFrom;
+      const shapes: Shape[] = [];
+      for (const [w, h] of rectangles(r, max)) if (thinOk || (w > 1 && h > 1)) shapes.push(rect(w, h));
+      if (r % 2 === 1 && r >= 3) {
+        for (const [w, h] of rectangles(r - 1, max)) if (thinOk || (w > 1 && h > 1)) shapes.push(...withTail(w, h));
+      }
+      // 2 列以上の形を先に試す
+      this.remainders.set(r, shapes.sort((a, b) => Number(isThin(a)) - Number(isThin(b))));
+    }
   }
 
   solve(): Set<number> | null {
-    return this.dfs(0, 0, this.remainder === 0) ? new Set(this.cells.filter((i) => this.state[i] === 2)) : null;
+    return this.dfs(0, 0, false) ? new Set(this.cells.filter((i) => this.state[i] === 2)) : null;
   }
 
   /**
    * @param k cells の何番目から調べるか
    * @param filled 区間にした点の数
-   * @param remainderUsed 余りの区間を置いたか（余りがないときは true）
+   * @param remainderUsed 余りの区間を置いたか（余りの区間は全体で 1 つまで）
    */
   private dfs(k: number, filled: number, remainderUsed: boolean): boolean {
-    if (filled === this.target) return remainderUsed;
+    if (filled === this.target) return true;
     if (++this.nodes > this.maxNodes) return false;
     while (k < this.cells.length && this.state[this.cells[k]] !== 0) k++;
     if (k >= this.cells.length) return false;
@@ -124,7 +180,7 @@ class Solver {
     for (const { shape, remainder } of this.shapes(need, remainderUsed)) {
       const placed = this.place(p, shape);
       if (!placed) continue;
-      if (this.dfs(k + 1, filled + shape.length, remainderUsed || remainder)) return true;
+      if (this.dfs(k + 1, filled + shape.cells.length, remainderUsed || remainder)) return true;
       this.unplace(placed);
     }
     // この点は石にする
@@ -134,18 +190,19 @@ class Solver {
     return false;
   }
 
-  /** 置ける区間の形（左上が (0,0)、行優先で最初の点が原点になるように並べる）。 */
+  /** 置ける区間の形（大きい区間から）。 */
   private shapes(need: number, remainderUsed: boolean): { shape: Shape; remainder: boolean }[] {
     const result: { shape: Shape; remainder: boolean }[] = [];
-    const max = this.n;
-    for (let area = Math.floor(need / 10) * 10; area >= 10; area -= 10) {
-      for (const [w, h] of rectangles(area, max)) result.push({ shape: rect(w, h), remainder: false });
+    for (let size = need; size >= 10; size--) {
+      for (const shape of this.multiples.get(size) ?? []) result.push({ shape, remainder: false });
     }
-    const r = this.remainder;
-    if (!remainderUsed && r > 0 && r <= need) {
-      for (const [w, h] of rectangles(r, max)) result.push({ shape: rect(w, h), remainder: true });
-      if (r % 2 === 1 && r >= 3) {
-        for (const shape of withTail(r - 1, max)) result.push({ shape, remainder: true });
+    if (!remainderUsed) {
+      // 余りの区間を置いた残りが、10 の倍数（と 5 × 奇数）の区間で埋められる目数になるものだけ
+      for (let r = Math.min(9, need); r >= 1; r--) {
+        const rest = need - r;
+        const ok = rest % 10 === 0 || (this.fiveByOdd && rest % 10 === 5 && rest >= 15);
+        if (!ok) continue;
+        for (const shape of this.remainders.get(r) ?? []) result.push({ shape, remainder: true });
       }
     }
     return result;
@@ -155,14 +212,23 @@ class Solver {
   private place(p: number, shape: Shape): { cells: number[]; walls: number[] } | null {
     const px = p % this.n;
     const py = Math.floor(p / this.n);
-    const cells: number[] = [];
-    for (const [dx, dy] of shape) {
+    const at = ([dx, dy]: [number, number]): number | null => {
       const x = px + dx;
       const y = py + dy;
       if (x < 0 || y < 0 || x >= this.n || y >= this.n) return null;
       const i = y * this.n + x;
-      if (!this.area.has(i) || this.state[i] !== 0) return null;
+      return this.area.has(i) ? i : null;
+    };
+    const cells: number[] = [];
+    for (const offset of shape.cells) {
+      const i = at(offset);
+      if (i === null || this.state[i] !== 0) return null;
       cells.push(i);
+    }
+    // 中に置く石の点（3x4−2 など）: 範囲の中で、ほかの区間になっていないこと。下の壁と同じく石にする
+    for (const offset of shape.holes) {
+      const i = at(offset);
+      if (i === null || this.state[i] === 2) return null;
     }
     const inShape = new Set(cells);
     const walls: number[] = [];
@@ -184,6 +250,24 @@ class Solver {
   }
 }
 
+function isThin(shape: Shape): boolean {
+  const xs = new Set(shape.cells.map(([x]) => x));
+  const ys = new Set(shape.cells.map(([, y]) => y));
+  if (xs.size === 1 || ys.size === 1) return true;
+  // しっぽ付き: しっぽを除いた矩形が 1 列か
+  const body = shape.cells.slice(0, -1);
+  return new Set(body.map(([x]) => x)).size === 1 || new Set(body.map(([, y]) => y)).size === 1;
+}
+
+/** w x h の矩形から holes を除いた形。 */
+function withHoles(w: number, h: number, holes: [number, number][]): Shape {
+  const isHole = (x: number, y: number) => holes.some(([hx, hy]) => hx === x && hy === y);
+  const cells: [number, number][] = [];
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (!isHole(x, y)) cells.push([x, y]);
+  // どの形も 1 行目は空点だけなので、原点 (0,0) は空点
+  return { cells, holes: holes.map(([x, y]) => [x, y]) };
+}
+
 /** 面積 area の矩形の (幅, 高さ)。正方形に近い順。 */
 function rectangles(area: number, max: number): [number, number][] {
   const result: [number, number][] = [];
@@ -196,25 +280,27 @@ function rectangles(area: number, max: number): [number, number][] {
 }
 
 function rect(w: number, h: number): Shape {
-  const shape: Shape = [];
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) shape.push([x, y]);
-  return shape;
+  const cells: [number, number][] = [];
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) cells.push([x, y]);
+  return { cells, holes: [] };
 }
 
-/** 面積 base の矩形に、辺に接する 1 マスのしっぽを付けた形（行優先で最初の点が原点）。 */
-function withTail(base: number, max: number): Shape[] {
+/**
+ * w x h の矩形に、辺に接する 1 マスのしっぽを付けた形（行優先で最初の点が原点）。
+ * cells の最後がしっぽ（isThin で使う）。
+ */
+function withTail(w: number, h: number): Shape[] {
   const result: Shape[] = [];
-  for (const [w, h] of rectangles(base, max)) {
-    const body = rect(w, h);
-    const tails: [number, number][] = [];
-    for (let x = 0; x < w; x++) tails.push([x, -1], [x, h]);
-    for (let y = 0; y < h; y++) tails.push([-1, y], [w, y]);
-    for (const tail of tails) {
-      const cells = [...body, tail];
-      const minY = Math.min(...cells.map(([, y]) => y));
-      const minX = Math.min(...cells.filter(([, y]) => y === minY).map(([x]) => x));
-      result.push(cells.map(([x, y]) => [x - minX, y - minY]));
-    }
+  const body = rect(w, h).cells;
+  const tails: [number, number][] = [];
+  for (let x = 0; x < w; x++) tails.push([x, -1], [x, h]);
+  for (let y = 0; y < h; y++) tails.push([-1, y], [w, y]);
+  for (const tail of tails) {
+    const cells = [...body, tail];
+    const minY = Math.min(...cells.map(([, y]) => y));
+    const minX = Math.min(...cells.filter(([, y]) => y === minY).map(([x]) => x));
+    // 原点は行優先で最初の点。並びは保ったまま（最後がしっぽ）、原点だけ合わせる
+    result.push({ cells: cells.map(([x, y]) => [x - minX, y - minY]), holes: [] });
   }
   return result;
 }

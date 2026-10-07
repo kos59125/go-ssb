@@ -1,6 +1,6 @@
 import { Analysis, Position, analyze, countDead, emptyTerritory } from "./analysis";
 import { Board, Color, opponent } from "./board";
-import { Section, classifySection } from "./shapes";
+import { DEFAULT_SHAPE_RULES, Section, ShapeRules, classifySection } from "./shapes";
 
 export interface TerritoryCheck {
   complete: boolean;
@@ -11,7 +11,12 @@ export interface TerritoryCheck {
 /**
  * ある色の地の整地が完了しているかを判定する（仕様書 §2.1）。
  */
-export function checkTerritory(position: Position, color: Color, analysis = analyze(position.board)): TerritoryCheck {
+export function checkTerritory(
+  position: Position,
+  color: Color,
+  analysis = analyze(position.board),
+  rules: ShapeRules = DEFAULT_SHAPE_RULES,
+): TerritoryCheck {
   const { board, trays } = position;
   const problems: string[] = [];
   const sections: TerritoryCheck["sections"] = [];
@@ -26,7 +31,7 @@ export function checkTerritory(position: Position, color: Color, analysis = anal
   let remainders = 0;
   for (const region of analysis.regions) {
     if (!region.territory || region.owner !== color) continue;
-    const section = classifySection(board, region.points, color);
+    const section = classifySection(board, region.points, color, rules);
     sections.push({ points: region.points, section });
     if (section.kind === "invalid") problems.push(`${section.size} 目の区間: ${section.reason}`);
     if (section.kind === "remainder") remainders++;

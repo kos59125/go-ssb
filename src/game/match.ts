@@ -1,6 +1,7 @@
 import { Position, analyze, countDead, score } from "../core/analysis";
 import { BLACK, Board, Color, EMPTY, WHITE, opponent } from "../core/board";
 import { checkTerritory, isRemovalDone } from "../core/judge";
+import { DEFAULT_SHAPE_RULES, ShapeRules } from "../core/shapes";
 
 export const PENALTY_MS = 5000;
 
@@ -44,6 +45,8 @@ export interface Hand {
 export interface MatchOptions {
   /** ペナルティの原因になった移動を自動で元に戻すか。 */
   undoOnPenalty: boolean;
+  /** 区間の形の追加ルール（1 列の区間の制限）。 */
+  shapeRules?: ShapeRules;
   now?: () => number;
 }
 
@@ -117,6 +120,10 @@ export class Match {
 
   get board(): Board {
     return this.position.board;
+  }
+
+  get shapeRules(): ShapeRules {
+    return this.options.shapeRules ?? DEFAULT_SHAPE_RULES;
   }
 
   get started(): boolean {
@@ -492,7 +499,7 @@ export class Player {
     const wrongAnswers: Color[] = [];
     for (const color of this.assigned) {
       const name = color === BLACK ? "黒地" : "白地";
-      const check = checkTerritory(this.position, color, analysis);
+      const check = checkTerritory(this.position, color, analysis, this.match.shapeRules);
       problems.push(...check.problems.map((p) => `${name}: ${p}`));
       const remainders = check.sections.filter((s) => s.section.kind === "remainder");
       for (const { points, section } of check.sections) {
@@ -519,6 +526,14 @@ export class Player {
    * 自分が開始から動かした石をすべて元に戻す（ギブアップ用）。ほかのプレイヤーの操作には触れない。
    * フェーズは死に石取りからやり直す。
    */
+  /**
+   * ギブアップのとき、ここまでの整地を CPU に引き継げるか。持っている石は先に戻しておく。
+   * 境界が閉じていて目数が変わっておらず、間違いの印もなければ引き継げる。
+   */
+  canHandOver(): boolean {
+    return !this.hand && !this.boundaryOpen && this.marks.size === 0 && sameScores(this.scores(), this.initialScores);
+  }
+
   revertAll(): void {
     this.cancel();
     const history = this.history;

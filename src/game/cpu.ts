@@ -9,10 +9,21 @@ export type CpuAction =
   | { kind: "idle" }
   | { kind: "capture"; point: number }
   | { kind: "pick"; point: number }
-  | { kind: "pick-tray" }
+  | { kind: "pick-tray"; owner: Color }
   | { kind: "place"; point: number }
-  | { kind: "drop-tray" }
+  | { kind: "drop-tray"; owner: Color }
   | { kind: "complete" };
+
+/**
+ * 決めた操作と、それを実際に行う関数。画面ではカーソルを操作する場所へ動かしてから run を呼ぶ
+ * （石がカーソルより先に動かないように）。run は盤が変わって操作できなかったら false を返す。
+ */
+export interface CpuPlan {
+  action: CpuAction;
+  run?: () => boolean;
+}
+
+const IDLE: CpuPlan = { action: { kind: "idle" } };
 
 /** CPU の強さの設定。 */
 export interface CpuProfile {
@@ -93,9 +104,17 @@ export class Cpu {
     }
   }
 
+  /** 次の操作を決めてすぐに行う。 */
   step(): CpuAction {
+    const plan = this.decide();
+    if (plan.run && !plan.run()) return { kind: "idle" };
+    return plan.action;
+  }
+
+  /** 次の操作を決める（盤はまだ変えない）。行うのは返した run。 */
+  decide(): CpuPlan {
     const p = this.player;
-    if (p.phase === "finished" || !p.started) return { kind: "idle" };
+    if (p.phase === "finished" || !p.started) return IDLE;
     if (p.hand) return this.placeHeld();
     if (p.phase === "removal") return this.removeDead();
     const fix = this.fixMistake();
@@ -129,31 +148,37 @@ export class Cpu {
    * 無駄な操作: 担当の地の石を持ち上げて、別の空点に置く（目数は変わらないが形は崩れる）か、
    * そのまま元に戻す。
    */
-  private wasteMove(): CpuAction | null {
+  private wasteMove(): CpuPlan | null {
     const p = this.player;
     const board = p.board;
     const area = this.areaPoints();
-    const stones = area.filter((i) => board.cells[i] !== EMPTY && board.isLiveStone(i));
+    const stones = area.filter((i) => board.cells[i] !== EMPTY && board.isLiveStone(i) && p.canPick(i));
     if (stones.length === 0) return null;
     const point = this.pickRandom(stones);
-    if (!p.pickUp([point])) return null;
-    this.wander = this.random() < 0.5 ? "move" : "return";
-    return { kind: "pick", point };
+    const wander = this.random() < 0.5 ? "move" : "return";
+    return {
+      action: { kind: "pick", point },
+      run: () => {
+        if (!p.pickUp([point])) return false;
+        this.wander = wander;
+        return true;
+      },
+    };
   }
 
   /** 自分が置いて印が付いた石を持ち上げる。置き場所は placeHeld で決める。 */
-  private fixMistake(): CpuAction | null {
+  private fixMistake(): CpuPlan | null {
     const p = this.player;
     for (const i of p.marks) {
-      if (!this.placed.has(i) || p.board.cells[i] === EMPTY) continue;
+      if (!this.placed.has(i) || p.board.cells[i] === EMPTY || !p.canPick(i)) continue;
       this.placed.delete(i);
-      if (p.pickUp([i])) return { kind: "pick", point: i };
+      return { action: { kind: "pick", point: i }, run: () => p.pickUp([i]) };
     }
     return null;
   }
 
   /** 死に石を 1 個取る（対戦では自分の地の中の相手の死に石、ひとりでモードではすべての死に石）。 */
-  private removeDead(): CpuAction {
+  private removeDead(): CpuPlan {
     const p = this.player;
     const { regions, regionOf } = analyze(p.board);
     if (this.chance(this.profile.mistake)) {
@@ -168,9 +193,10 @@ export class Cpu {
           live.push(i);
         }
       }
-      if (live.length > 0) {
-        const point = this.pickRandom(live);
-        if (p.capture(point)) return { kind: "capture", point };
+      const candidates = live.filter((i) => p.canPick(i));
+      if (candidates.length > 0) {
+        const point = this.pickRandom(candidates);
+        return { action: { kind: "capture", point }, run: () => p.capture(point) };
       }
     }
     const targets: number[] = [];
@@ -185,51 +211,73 @@ export class Cpu {
       const size = p.board.size;
       targets.sort((a, b) => distance(a, from, size) - distance(b, from, size));
     }
-    for (const i of targets) {
-      if (p.capture(i)) {
-        this.cursor = i;
-        return { kind: "capture", point: i };
-      }
+    const point = targets.find((i) => p.canPick(i));
+    if (point !== undefined) {
+      return {
+        action: { kind: "capture", point },
+        run: () => {
+          if (!p.capture(point)) return false;
+          this.cursor = point;
+          return true;
+        },
+      };
     }
     p.updatePhase();
-    return { kind: "idle" };
+    return IDLE;
   }
 
-  private arrange(): CpuAction {
+  private arrange(): CpuPlan {
     const p = this.player;
     const board = p.board;
     const { regions, regionOf } = analyze(board);
     for (const color of p.assigned) {
       // 担当の地に、相手が取り上げる死に石が残っている間は待つ
       for (let i = 0; i < board.cells.length; i++) {
-        if (board.dead[i] === 1 && regions[regionOf[i]].owner === color) return { kind: "idle" };
+        if (board.dead[i] === 1 && regions[regionOf[i]].owner === color) return IDLE;
       }
       const plan = this.validPlan(color);
-      if (!plan) return { kind: "idle" };
+      if (!plan) return IDLE;
       const { sinks, sources } = this.diff(plan);
       if (sinks.length + sources.length > 0 && this.chance(this.profile.mistake / 3)) {
         // 整地ミス: 整地の途中なのに完了してしまう（ペナルティ）
-        this.completeWith(p.initialScores);
-        return { kind: "complete" };
+        const scores = { ...p.initialScores };
+        return { action: { kind: "complete" }, run: () => (this.completeWith(scores), true) };
       }
       if (sinks.length > 0) {
         if (sources.length > 0) {
-          const picked = this.grabSources(sources, sinks);
-          if (p.pickUp(picked)) {
-            this.cursor = picked[0];
-            return { kind: "pick", point: picked[0] };
+          const picked = this.grabSources(sources, sinks).filter((i) => p.canPick(i));
+          if (picked.length > 0) {
+            return {
+              action: { kind: "pick", point: picked[0] },
+              run: () => {
+                if (!p.pickUp(picked)) return false;
+                this.cursor = picked[0];
+                return true;
+              },
+            };
           }
-        } else if (p.pickFromTray(opponent(color), Math.min(this.profile.batch, sinks.length, p.handRoom))) {
+        } else {
           // color の石は、相手（opponent(color)）のトレイにある
-          if (this.chance(this.profile.mistake)) this.misplace = true;
-          return { kind: "pick-tray" };
+          const owner = opponent(color);
+          const count = Math.min(this.profile.batch, sinks.length, p.handRoom, p.position.trays[owner]);
+          if (count > 0 && p.canUseTray(owner)) {
+            const misplace = this.chance(this.profile.mistake);
+            return {
+              action: { kind: "pick-tray", owner },
+              run: () => {
+                if (!p.pickFromTray(owner, count)) return false;
+                if (misplace) this.misplace = true;
+                return true;
+              },
+            };
+          }
         }
         this.layouts.set(color, null); // 石が足りない: 計画を立て直す
-        return { kind: "idle" };
+        return IDLE;
       }
       if (sources.length > 0) {
         this.layouts.set(color, null);
-        return { kind: "idle" };
+        return IDLE;
       }
     }
 
@@ -237,7 +285,7 @@ export class Cpu {
     const scores = p.scores();
     const ready =
       !p.boundaryOpen &&
-      p.assigned.every((c) => checkTerritory(p.position, c).complete && scores[c] === p.initialScores[c]);
+      p.assigned.every((c) => checkTerritory(p.position, c, undefined, p.match.shapeRules).complete && scores[c] === p.initialScores[c]);
     if (ready) {
       const answer: Record<Color, number> = { ...p.initialScores };
       if (this.chance(Math.min(0.5, this.profile.mistake * 4))) {
@@ -245,10 +293,9 @@ export class Cpu {
         const c = this.pickRandom(p.assigned);
         answer[c] += this.pickRandom([-10, -1, 1, 10]);
       }
-      this.completeWith(answer);
-      return { kind: "complete" };
+      return { action: { kind: "complete" }, run: () => (this.completeWith(answer), true) };
     }
-    return { kind: "idle" };
+    return IDLE;
   }
 
   private completeWith(scores: Record<Color, number>): boolean {
@@ -258,25 +305,28 @@ export class Cpu {
   }
 
   /** 持っている石を、その色の計画で次に埋める点に置く。埋める点がなければ元に戻す。 */
-  private placeHeld(): CpuAction {
+  private placeHeld(): CpuPlan {
     const p = this.player;
     const stone = p.hand!.stones[0];
     const color = stone.color;
     const wander = this.wander;
     this.wander = null;
+    const placeAt = (point: number, after?: () => void): CpuPlan => ({
+      action: { kind: "place", point },
+      run: () => {
+        if (!p.placeAt(point, color)) return false;
+        after?.();
+        return true;
+      },
+    });
     if (wander === "return" && stone.source.kind === "board") {
-      const point = stone.source.point;
-      p.cancel();
-      return { kind: "place", point };
+      return { action: { kind: "place", point: stone.source.point }, run: () => (p.cancel(), true) };
     }
     if (wander === "move" && stone.source.kind === "board") {
       const area = this.layouts.get(color)?.area ?? new Set<number>();
       const origin = stone.source.point;
-      const empties = [...area].filter((i) => p.board.cells[i] === EMPTY && i !== origin);
-      if (empties.length > 0) {
-        const point = this.pickRandom(empties);
-        if (p.placeAt(point, color)) return { kind: "place", point };
-      }
+      const empties = [...area].filter((i) => p.board.cells[i] === EMPTY && i !== origin && p.canPlace(i));
+      if (empties.length > 0) return placeAt(this.pickRandom(empties));
     }
     // 判定は手が空になった時点なので、間違えるのは最後の 1 個にする
     if (this.misplace && p.hand!.stones.length === 1) {
@@ -285,35 +335,35 @@ export class Cpu {
       const enemy = opponent(color);
       const targets: number[] = [];
       for (let i = 0; i < p.board.cells.length; i++) {
-        if (p.board.cells[i] === EMPTY && p.match.settledOwner[i] === enemy) targets.push(i);
+        if (p.board.cells[i] === EMPTY && p.match.settledOwner[i] === enemy && p.canPlace(i)) targets.push(i);
       }
       if (targets.length > 0) {
         const point = this.pickRandom(targets);
-        if (p.placeAt(point, color)) {
-          this.placed.add(point);
-          return { kind: "place", point };
-        }
+        return placeAt(point, () => this.placed.add(point));
       }
     }
     const plan = this.validPlan(color);
-    const sinks = plan ? this.diff(plan).sinks : [];
+    const sinks = (plan ? this.diff(plan).sinks : []).filter((i) => p.canPlace(i));
     if (sinks.length > 0) {
       const sink = this.profile.efficient && this.cursor !== null ? nearest(sinks, this.cursor, p.board.size) : sinks[0];
-      if (p.placeAt(sink, color)) {
+      return placeAt(sink, () => {
         this.placed.add(sink);
         this.cursor = sink;
-        return { kind: "place", point: sink };
-      }
+      });
     }
     if (stone.source.kind === "board" && p.board.cells[stone.source.point] === EMPTY && !stone.marked) {
-      p.cancel();
-      return { kind: "place", point: stone.source.point };
+      return { action: { kind: "place", point: stone.source.point }, run: () => (p.cancel(), true) };
     }
     // 間違えて置いた石を直すとき: 埋める点がなければアゲハマに戻す
     const owner = opponent(color);
-    if (stone.marked && p.dropToTray(owner, Infinity) && !p.hand) return { kind: "drop-tray" };
-    p.cancel();
-    return { kind: "idle" };
+    if (stone.marked && p.canUseTray(owner)) {
+      return { action: { kind: "drop-tray", owner }, run: () => p.dropToTray(owner, Infinity) };
+    }
+    // 持っている石を元に戻す（トレイから持った石はトレイへ）
+    if (stone.source.kind === "tray") {
+      return { action: { kind: "drop-tray", owner: stone.source.owner }, run: () => (p.cancel(), true) };
+    }
+    return { action: { kind: "idle" }, run: () => (p.cancel(), true) };
   }
 
   /** color の地の計画が今の盤で使えるか確かめ、使えなければ立て直す。 */
@@ -333,7 +383,13 @@ export class Cpu {
     const current = this.layouts.get(color);
     if (current && usable(current)) return current;
     const held = this.player.hand?.stones.filter((s) => s.color === color).length ?? 0;
-    const layout = planLayout(board, color, this.player.position.trays[opponent(color)] + held, 20_000);
+    const layout = planLayout(
+      board,
+      color,
+      this.player.position.trays[opponent(color)] + held,
+      20_000,
+      this.player.match.shapeRules,
+    );
     this.layouts.set(color, layout);
     return layout;
   }

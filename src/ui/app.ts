@@ -7,7 +7,7 @@ import { BLACK, Board, Color, EMPTY, WHITE, opponent } from "../core/board";
 import { mulberry32, randomSeed, seedNumber } from "../core/random";
 import { dummyPosition } from "../game/dummy";
 import { CPU_LEVELS, Cpu, CpuAction, CpuLevel, isCpuLevel } from "../game/cpu";
-import { planLayouts, SerializedLayout } from "../game/layout";
+import { planLayout, planLayouts, SerializedLayout } from "../game/layout";
 import { DEFAULT_HAND_LIMIT, Match, Player, byDistanceFrom } from "../game/match";
 import { PENALTY_MS, Session } from "../game/session";
 import { BoardView } from "./boardView";
@@ -34,6 +34,9 @@ interface Settings {
   /** 読み込んだ実戦の棋譜（SGF）。あればシードの代わりにこれを使う。保存しない。 */
   record?: GameRecord;
 }
+
+/** CPU のカーソルが操作する場所へ動く時間（CSS の .cpu-cursor の transition と合わせる）。 */
+const CURSOR_TRAVEL_MS = 250;
 
 /** 棋譜の再生にかける時間。 */
 const REPLAY_MS = 10_000;
@@ -835,31 +838,37 @@ function showGame(
     scoreForm.querySelector(".buttons")?.remove();
     colorPicker.hidden = true;
     message.textContent = "";
-    // 自分の操作をすべて元に戻し、CPU が代わりに死に石取りから整地する
-    session.revertAll();
+    // 持っている石は元に戻す。ここまでの整地は、正しい状態（境界が閉じていて目数が変わっていない）で
+    // CPU が続きを計画できれば引き継ぐ。できなければ自分の操作をすべて元に戻し、死に石取りからやり直す
+    session.cancel();
+    if (!session.canHandOver() || !canPlanAll(session)) session.revertAll();
     if (cpuMode) decided = true;
     phaseLabel.textContent = cpuMode ? "ギブアップ（CPU の勝ち）。CPU が代わりに整地しています…" : "ギブアップ。CPU が代わりに整地しています…";
     showGiveUpResult();
     const auto = new Cpu(session, layouts ?? {});
     autoCursor.hidden = false;
-    moveCursor(autoCursor, auto, null, session.color ?? BLACK);
+    moveCursor(autoCursor, auto, null);
     let idle = 0;
+    let busy = false;
     const autoTimer = window.setInterval(() => {
-      const action = auto.step();
-      moveCursor(autoCursor, auto, action, session.color ?? BLACK);
-      render();
-      if (session.phase === "finished") {
-        window.clearInterval(autoTimer);
-        phaseLabel.textContent = cpuMode ? "ギブアップ（CPU の勝ち）" : "ギブアップ";
-        root.querySelector(".game")!.classList.add("finished");
-        return;
-      }
-      // 相手の死に石取りを待つ間を除き、手が止まったままなら整地できなかったとみなす
-      idle = action.kind === "idle" && !(cpuPlayer && cpuPlayer.phase === "removal") ? idle + 1 : 0;
-      if (idle > 20) {
-        window.clearInterval(autoTimer);
-        phaseLabel.textContent = "ギブアップ。この局面は CPU が整地できませんでした。";
-      }
+      if (busy) return;
+      busy = true;
+      cpuTurn(autoCursor, auto, (action) => {
+        busy = false;
+        render();
+        if (session.phase === "finished") {
+          window.clearInterval(autoTimer);
+          phaseLabel.textContent = cpuMode ? "ギブアップ（CPU の勝ち）" : "ギブアップ";
+          root.querySelector(".game")!.classList.add("finished");
+          return;
+        }
+        // 相手の死に石取りを待つ間を除き、手が止まったままなら整地できなかったとみなす
+        idle = action.kind === "idle" && !(cpuPlayer && cpuPlayer.phase === "removal") ? idle + 1 : 0;
+        if (idle > 20) {
+          window.clearInterval(autoTimer);
+          phaseLabel.textContent = "ギブアップ。この局面は CPU が整地できませんでした。";
+        }
+      });
     }, 350);
     cleanups.push(() => window.clearInterval(autoTimer));
     render();
@@ -1005,45 +1014,76 @@ function showGame(
   let cpuWaiting = false;
   /** CPU のカーソルを、操作した点（またはトレイ）へ動かす。 */
   const moveCpuCursor = (action: CpuAction | null) => {
-    if (cpu) moveCursor(cpuCursor, cpu, action, cpuColor);
+    if (cpu) moveCursor(cpuCursor, cpu, action);
   };
-  const moveCursor = (cursor: HTMLElement, cpu: Cpu, action: CpuAction | null, trayOwner: Color) => {
+  const moveCursor = (cursor: HTMLElement, cpu: Cpu, action: CpuAction | null) => {
     let target: { x: number; y: number } | null = null;
     if (action && "point" in action) {
       const box = view.svg.getBoundingClientRect();
       const { x, y } = view.pointBox(action.point);
       target = { x: box.left + x, y: box.top + y };
     } else if (action?.kind === "pick-tray" || action?.kind === "drop-tray") {
-      // どちらのトレイから持ったかは、持っている石の色で決まる
-      const held = cpu.player.hand?.stones.at(-1);
-      const owner = held ? opponent(held.color) : trayOwner;
-      const box = trays[owner].view.svg.getBoundingClientRect();
+      const box = trays[action.owner].view.svg.getBoundingClientRect();
       target = { x: box.left + 20, y: box.top + 15 };
     } else if (!cursor.style.transform) {
       const box = view.svg.getBoundingClientRect();
       target = { x: box.left + box.width / 2, y: box.top + box.height / 2 };
     }
     if (target) cursor.style.transform = `translate(${target.x}px, ${target.y}px)`;
+    showHeld(cursor, cpu);
+  };
+  /** カーソルに、CPU が持っている石を表示する。 */
+  const showHeld = (cursor: HTMLElement, cpu: Cpu) => {
     const held = cpu.player.hand?.stones[0];
     cursor.classList.toggle("holding-black", held?.color === BLACK);
     cursor.classList.toggle("holding-white", held?.color === WHITE);
   };
 
+  /**
+   * CPU の 1 回の操作。先にカーソルを操作する場所へ動かし、着いてから（CURSOR_TRAVEL_MS 後に）
+   * 盤やトレイの石を動かす。石がカーソルより先に動いて見えないようにするため。
+   */
+  const cpuTurn = (cursor: HTMLElement, player: Cpu, after: (action: CpuAction) => void) => {
+    const plan = player.decide();
+    moveCursor(cursor, player, plan.action);
+    const finish = () => {
+      plan.run?.();
+      showHeld(cursor, player);
+      after(plan.action);
+    };
+    if (plan.action.kind === "idle") {
+      finish();
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      pendingTimers.delete(timer);
+      finish();
+    }, CURSOR_TRAVEL_MS);
+    pendingTimers.add(timer);
+  };
+  const pendingTimers = new Set<number>();
+  cleanups.push(() => {
+    for (const timer of pendingTimers) window.clearTimeout(timer);
+  });
+
   const startCpu = () => {
     if (!cpu) return;
+    let busy = false;
     const timer = window.setInterval(() => {
       // 勝敗が決まったら止める（ギブアップのときは、盤を仕上げるために最後まで続ける）
-      if (decided && gaveUpAt === null) return;
+      if (busy || (decided && gaveUpAt === null)) return;
       if (cpu!.player.phase === "finished") return;
+      busy = true;
       const before = session.penalties;
       const cpuBefore = cpu!.player.penalties;
-      const action = cpu!.step();
-      cpuWaiting = action.kind === "idle" && cpu!.player.phase === "arrange";
-      moveCpuCursor(action);
-      penaltyCheck(before);
-      if (gaveUpAt === null && cpu!.player.penalties > cpuBefore) notice(`CPU がミスしました（+${PENALTY_MS / 1000} 秒）`);
-      render();
-      decide();
+      cpuTurn(cpuCursor, cpu!, (action) => {
+        busy = false;
+        cpuWaiting = action.kind === "idle" && cpu!.player.phase === "arrange";
+        penaltyCheck(before);
+        if (gaveUpAt === null && cpu!.player.penalties > cpuBefore) notice(`CPU がミスしました（+${PENALTY_MS / 1000} 秒）`);
+        render();
+        decide();
+      });
     }, CPU_LEVELS[settings.cpuLevel].interval);
     cleanups.push(() => window.clearInterval(timer));
   };
@@ -1100,6 +1140,14 @@ function recordLabel(record: GameRecord): string {
 }
 
 /** 設定項目のラジオボタン群。 */
+/** 担当の地のすべてで、今の盤から整地の形が見つかるか（死に石取りの途中なら見つかるものとする）。 */
+function canPlanAll(player: Player): boolean {
+  if (player.phase !== "arrange") return true;
+  return player.assigned.every(
+    (c) => planLayout(player.board, c, player.position.trays[opponent(c)], 20_000, player.match.shapeRules) !== null,
+  );
+}
+
 /** 一度に持てる石の数の上限として選べる最大値。 */
 const MAX_HAND_LIMIT = 99;
 
