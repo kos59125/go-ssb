@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { BLACK, Color, EMPTY, WHITE, parseBoard } from "../core/board";
 import { mulberry32 } from "../core/random";
-import { Match, Player } from "./match";
+import { Match, Player, byDistanceFrom } from "./match";
 
 /** 左が黒地、右が白地。白の 3x3 の塊 (5..7, 5..7) がある。 */
 const BOARD = `
@@ -97,6 +97,17 @@ describe("対戦（2 人で同じ盤を操作）", () => {
     expect(white.pickFromTray(WHITE, 3)).toBe(false); // トレイは空
     expect(white.pickUp([0 * 9 + 3, 1 * 9 + 3])).toBe(true);
     expect(white.hand!.stones.length).toBe(4);
+  });
+
+  it("範囲選択で上限を超えるときは、起点に近い石から持つ", () => {
+    const match = new Match({ board: parseBoard(BOARD), trays: { [BLACK]: 3, [WHITE]: 3 } }, { undoOnPenalty: true });
+    const black = new Player(match, { color: BLACK, handLimit: 3 });
+    match.begin();
+    // (4,0)〜(5,7) の範囲を、右下 (5,7) を起点に選ぶ
+    const rect: number[] = [];
+    for (let y = 0; y <= 7; y++) for (let x = 4; x <= 5; x++) rect.push(y * 9 + x);
+    expect(black.pickUp(byDistanceFrom(9, rect, 7 * 9 + 5))).toBe(true);
+    expect(black.hand!.stones.map((s) => (s.source as { point: number }).point)).toEqual([7 * 9 + 5, 6 * 9 + 5, 7 * 9 + 4]);
   });
 });
 

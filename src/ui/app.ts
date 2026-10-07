@@ -8,7 +8,7 @@ import { mulberry32, randomSeed, seedNumber } from "../core/random";
 import { dummyPosition } from "../game/dummy";
 import { CPU_LEVELS, Cpu, CpuAction, CpuLevel, isCpuLevel } from "../game/cpu";
 import { planLayouts, SerializedLayout } from "../game/layout";
-import { DEFAULT_HAND_LIMIT, Match, Player } from "../game/match";
+import { DEFAULT_HAND_LIMIT, Match, Player, byDistanceFrom } from "../game/match";
 import { PENALTY_MS, Session } from "../game/session";
 import { BoardView } from "./boardView";
 import { TRAY_SLOTS, TrayView } from "./trayView";
@@ -691,7 +691,8 @@ function showGame(
         if (tray !== null && session.hand) dropToTray(tray);
       } else if (!drag.dropping && drag.current !== drag.start) {
         // 範囲選択（押した点が空点でも石でもよい）。持っている石に追加する
-        pickUp(pointsInRect(settings.size, drag.start, drag.current));
+        // 持てる数の上限を超えるときは、起点（押した点）に近い石から持つ
+        pickUp(byDistanceFrom(settings.size, pointsInRect(settings.size, drag.start, drag.current), drag.start));
       } else if (i === drag.start) {
         // 死に石取りの間は、クリックした石をそのままアゲハマトレイへ
         if (session.board.cells[i] !== EMPTY) {

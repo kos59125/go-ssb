@@ -345,7 +345,7 @@ export class Player {
 
   /**
    * 盤上の石を持つ（範囲選択では範囲内の石すべて）。持てる数の上限を超える分は、
-   * points の順（範囲選択では上の行から左→右）で後ろの石を残す。
+   * points の順で後ろの石を残す（範囲選択では起点に近い順に並べて渡す。byDistanceFrom）。
    */
   pickUp(points: number[]): boolean {
     if (this.phase === "finished") return false;
@@ -746,6 +746,17 @@ function openPoints(board: Board): number {
     for (const i of region.points) if (board.cells[i] === EMPTY) n++;
   }
   return n;
+}
+
+/**
+ * 範囲選択した点を、起点（ドラッグを始めた点）に近い順に並べる。持てる数の上限を超えるときは、
+ * この順に上限まで持つ。距離が同じなら上の行から左→右の順。
+ */
+export function byDistanceFrom(size: number, points: number[], origin: number): number[] {
+  const ox = origin % size;
+  const oy = Math.floor(origin / size);
+  const dist = (i: number) => ((i % size) - ox) ** 2 + (Math.floor(i / size) - oy) ** 2;
+  return [...points].sort((a, b) => dist(a) - dist(b) || a - b);
 }
 
 function sameScores(a: Record<Color, number>, b: Record<Color, number>): boolean {
