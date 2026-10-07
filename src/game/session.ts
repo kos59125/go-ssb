@@ -1,4 +1,4 @@
-import { Position, analyze, score } from "../core/analysis";
+import { Position, analyze, countDead, score } from "../core/analysis";
 import { BLACK, Board, Color, EMPTY, WHITE, opponent } from "../core/board";
 import { checkTerritory, isRemovalDone } from "../core/judge";
 
@@ -70,6 +70,8 @@ export class Session {
   private settledOwner!: Uint8Array;
   /** 境界が開いてから置いた石と、持ち上げた元の点。 */
   private pending = { placed: [] as number[], origins: [] as number[], carriedMark: false };
+  /** 各トレイに入れられる石の上限（アゲハマの総数）。生きた石をアゲハマにはできない。 */
+  readonly trayCapacity: Record<Color, number> = { [BLACK]: 0, [WHITE]: 0 };
   /** 開始の合図（begin）の時刻。合図の前は null。 */
   startedAt: number | null = null;
   finishedAt: number | null = null;
@@ -81,6 +83,10 @@ export class Session {
     this.options = options;
     this.initialScores = this.scores();
     this.baseOpen = openPoints(this.board);
+    // トレイに入るアゲハマの総数 = 対局中に取った石 + 盤上の相手の死に石
+    for (const owner of [BLACK, WHITE] as const) {
+      this.trayCapacity[owner] = this.position.trays[owner] + countDead(this.board, opponent(owner));
+    }
     this.markSettled();
     this.updatePhase();
   }
@@ -237,9 +243,12 @@ export class Session {
     const hand = this.hand;
     if (!hand) return false;
     const color = opponent(owner);
+    // 死に石取りでは死に石かどうかを手が空になった時点で判定するので、ここでは制限しない
+    const room = this.phase === "removal" ? Infinity : this.trayCapacity[owner] - this.position.trays[owner];
+    const limit = Math.min(count, room);
     let moved = 0;
     hand.stones = hand.stones.filter((s) => {
-      if (moved >= count || s.color !== color) return true;
+      if (moved >= limit || s.color !== color) return true;
       moved++;
       return false;
     });
@@ -323,14 +332,17 @@ export class Session {
     this.markSettled();
   }
 
-  /** 死に石取りのフェーズ: 生きた石を取ったら、設定によらず元に戻す。 */
+  /**
+   * 死に石取りのフェーズ: 死に石以外の石を取ったら、設定によらず元に戻す。
+   * 目数では判定しない（自分の地の中の生きた石を取ると、地が 1 増えアゲハマも 1 増えて
+   * 目数が変わらないため）。
+   */
   private settleRemoval(hand: Hand): void {
-    if (!sameScores(this.scores(), this.initialScores)) {
+    const live = hand.origins.filter((point) => hand.before.dead[point] === 0);
+    if (live.length > 0 || !sameScores(this.scores(), this.initialScores)) {
       this.penalties++;
       // 元に戻す前の盤で、取り上げた点にあった石の色を記録する（演出用）
-      this.rejected = hand.origins
-        .filter((point) => hand.before.dead[point] === 0)
-        .map((point) => ({ point, color: hand.before.cells[point] as Color }));
+      this.rejected = live.map((point) => ({ point, color: hand.before.cells[point] as Color }));
       this.restore(hand.before);
     }
     this.updatePhase();

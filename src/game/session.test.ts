@@ -77,6 +77,42 @@ describe("Session", () => {
     expect(t.hand).toBeNull();
   });
 
+  it("死に石取りで、境界でない生きた石（目数が変わらない石）を取ってもペナルティ", () => {
+    // 黒地の中の黒石 (1,1) は取っても「地 +1・アゲハマ +1」で目数が変わらない
+    const board = parseBoard(`
+      ....xo...
+      .x..xo...
+      ..O.xo...
+      ....xo...
+      xxxxxo...
+      .....o...
+      ooooooooo
+      .........
+      .........
+    `);
+    const s = new Session({ board, trays: { [BLACK]: 0, [WHITE]: 0 } }, { undoOnPenalty: false });
+    s.capture(board.index(1, 1));
+    expect(s.penalties).toBe(1);
+    expect(s.board.get(1, 1)).toBe(BLACK);
+    expect(s.position.trays[WHITE]).toBe(0);
+    expect(s.rejected).toEqual([{ point: board.index(1, 1), color: BLACK }]);
+  });
+
+  it("整地中は、アゲハマの総数より多くトレイに入れられない", () => {
+    const { s } = session(true, { [BLACK]: 1, [WHITE]: 0 });
+    removeDead(s);
+    // 黒のトレイ: 対局中のアゲハマ 1 + 白の死に石 1 = 2 個まで
+    expect(s.trayCapacity[BLACK]).toBe(2);
+    // 盤上の白石をトレイに入れようとしても入らない
+    s.pickUp([s.board.index(5, 0)]);
+    expect(s.dropToTray(BLACK)).toBe(false);
+    s.cancel();
+    // トレイから出した分は戻せる
+    s.pickFromTray(BLACK, 1);
+    expect(s.dropToTray(BLACK)).toBe(true);
+    expect(s.position.trays[BLACK]).toBe(2);
+  });
+
   it("死に石取りで生きた石を取るとペナルティで、設定によらず元に戻る", () => {
     const { s } = session(false);
     const i = s.board.index(4, 0);

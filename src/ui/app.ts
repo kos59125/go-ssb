@@ -332,8 +332,12 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
   };
 
   const dropToTray = (owner: Color) => {
-    if (session.hand && !session.dropToTray(owner)) {
+    if (!session.hand || session.dropToTray(owner)) return;
+    const fits = session.hand.stones.some((s) => s.color === opponent(owner));
+    if (!fits) {
       notice(owner === BLACK ? "黒のアゲハマには白石だけが入ります。" : "白のアゲハマには黒石だけが入ります。");
+    } else {
+      notice(`このトレイのアゲハマは ${session.trayCapacity[owner]} 個です。盤上の石をアゲハマにはできません。`);
     }
   };
 
