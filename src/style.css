@@ -533,3 +533,23 @@ button.primary {
     opacity: 0;
   }
 }
+
+/* 「完了」で見つかった誤り */
+.error-ring {
+  fill: rgb(224 50 42 / 0.18);
+  stroke: #e0322a;
+  stroke-width: 2;
+}
+
+.error-mark {
+  stroke: #e0322a;
+  stroke-width: 5;
+  stroke-linecap: round;
+}
+
+.score-inputs input.wrong {
+  border: 2px solid #e0322a;
+  background: #fde8e6;
+  outline: none;
+  animation: shake 0.45s ease-in-out;
+}

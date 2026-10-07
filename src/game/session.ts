@@ -46,7 +46,16 @@ export interface SessionOptions {
   now?: () => number;
 }
 
-export type CompleteResult = { ok: true } | { ok: false; problems: string[] };
+export type CompleteResult =
+  | { ok: true }
+  | {
+      ok: false;
+      problems: string[];
+      /** 誤りのある場所（形が違う区間、境界に別の色が混ざっている所など）。 */
+      errorPoints: number[];
+      /** 入力した目数が違う色。 */
+      wrongAnswers: Color[];
+    };
 
 /**
  * ひとりでモードの 1 ゲーム（仕様書 §2, §3.2）。
@@ -62,6 +71,8 @@ export class Session {
   readonly marks = new Set<number>();
   phase: Phase = "removal";
   penalties = 0;
+  /** 開始時の中立の空点（セキ）。 */
+  private readonly baseOpenPoints = new Set<number>();
   /** 開始時の中立の空点（セキ）の数。これより多ければ境界が開いている。 */
   private readonly baseOpen: number;
   /** 最後に境界が閉じていた時点の状態。境界を開いたまま誤った場合はここまで戻す。 */
@@ -83,6 +94,10 @@ export class Session {
     this.options = options;
     this.initialScores = this.scores();
     this.baseOpen = openPoints(this.board);
+    for (const region of analyze(this.board).regions) {
+      if (region.owner !== null) continue;
+      for (const i of region.points) if (this.board.cells[i] === EMPTY) this.baseOpenPoints.add(i);
+    }
     // トレイに入るアゲハマの総数 = 対局中に取った石 + 盤上の相手の死に石
     for (const owner of [BLACK, WHITE] as const) {
       this.trayCapacity[owner] = this.position.trays[owner] + countDead(this.board, opponent(owner));
@@ -102,6 +117,38 @@ export class Session {
 
   clearRejected(): void {
     this.rejected = [];
+  }
+
+  /**
+   * 境界が開いている所（開始時のセキを除く、両方の色に接する領域）。
+   * 接している石の少ない方の色が 3 個以下なら、その石（地に混ざった別の色の石）を返す。
+   * そうでなければ、両方の色に接している空点（境界の切れ目）を返す。
+   */
+  private openSpots(analysis = analyze(this.board)): number[] {
+    const spots: number[] = [];
+    for (const region of analysis.regions) {
+      if (region.owner !== null) continue;
+      const empties = region.points.filter((i) => this.board.cells[i] === EMPTY && !this.baseOpenPoints.has(i));
+      if (empties.length === 0) continue;
+      const touching: Record<Color, Set<number>> = { [BLACK]: new Set(), [WHITE]: new Set() };
+      for (const i of region.points) {
+        for (const j of this.board.neighbors(i)) {
+          if (this.board.isLiveStone(j)) touching[this.board.cells[j] as Color].add(j);
+        }
+      }
+      const minority = touching[BLACK].size <= touching[WHITE].size ? touching[BLACK] : touching[WHITE];
+      if (minority.size <= 3) {
+        spots.push(...minority);
+      } else {
+        spots.push(
+          ...empties.filter((i) => {
+            const colors = new Set(this.board.neighbors(i).filter((j) => this.board.isLiveStone(j)).map((j) => this.board.cells[j]));
+            return colors.size === 2;
+          }),
+        );
+      }
+    }
+    return spots;
   }
 
   /** 境界が開いているか（どちらの地でもない空点が開始時より多い）。 */
@@ -274,15 +321,27 @@ export class Session {
     if (this.boundaryOpen) problems.push("境界が開いている");
     else if (!sameScores(scores, this.initialScores)) problems.push("間違えて置いた石がある");
     const analysis = analyze(this.board);
+    const errorPoints = new Set<number>();
+    const wrongAnswers: Color[] = [];
     for (const color of [BLACK, WHITE] as const) {
       const name = color === BLACK ? "黒地" : "白地";
       const check = checkTerritory(this.position, color, analysis);
       problems.push(...check.problems.map((p) => `${name}: ${p}`));
-      if (answer[color] !== this.initialScores[color]) problems.push(`${name}の目数が違う`);
+      const remainders = check.sections.filter((s) => s.section.kind === "remainder");
+      for (const { points, section } of check.sections) {
+        if (section.kind === "invalid" || (section.kind === "remainder" && remainders.length > 1)) {
+          for (const i of points) errorPoints.add(i);
+        }
+      }
+      if (answer[color] !== this.initialScores[color]) {
+        problems.push(`${name}の目数が違う`);
+        wrongAnswers.push(color);
+      }
     }
+    for (const i of this.openSpots(analysis)) errorPoints.add(i);
     if (problems.length > 0) {
       this.penalties++;
-      return { ok: false, problems };
+      return { ok: false, problems, errorPoints: [...errorPoints], wrongAnswers };
     }
     this.phase = "finished";
     this.finishedAt = this.now();

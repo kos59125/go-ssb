@@ -223,6 +223,9 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
     h("p", { class: "note" }, ["アゲハマが地より多いときはマイナスで入力します。"]),
     h("div", { class: "buttons" }, [h("button", { class: "primary" }, ["完了"]), quitButton]),
   ]);
+  for (const input of [blackInput, whiteInput]) {
+    input.addEventListener("input", () => input.classList.remove("wrong"));
+  }
   const resultBox = h("div", { class: "result-box" }, []);
   resultBox.hidden = true;
 
@@ -261,6 +264,8 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
   let drag: Drag = null;
   let pointer = { x: 0, y: 0 };
   const cleanups: (() => void)[] = [];
+  // 「完了」で見つかった誤りの場所。次の操作で消す
+  let errorMarks = new Set<number>();
   let messageTimer = 0;
   let toastTimer = 0;
 
@@ -278,7 +283,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
   };
 
   const render = () => {
-    view.render(session.board, session.marks, session.hand?.origins ?? []);
+    view.render(session.board, session.marks, session.hand?.origins ?? [], errorMarks);
     phaseLabel.textContent =
       session.phase === "removal"
         ? `① 死に石取り：死に石をアゲハマトレイへ（残り ${countDeadStones(session)} 個）`
@@ -344,6 +349,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
   // --- 押す ---
   view.svg.addEventListener("pointerdown", (e) => {
     if (!session.started || (e.button !== 0 && e.button !== 2)) return;
+    errorMarks = new Set();
     const i = view.pointAt(e.clientX, e.clientY);
     if (i === null) return;
     pointer = { x: e.clientX, y: e.clientY };
@@ -356,6 +362,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
     const tray = trays[owner];
     tray.root.addEventListener("pointerdown", (e) => {
       if (!session.started || (e.button !== 0 && e.button !== 2)) return;
+      errorMarks = new Set();
       pointer = { x: e.clientX, y: e.clientY };
       const cell = tray.view.cellAt(e.clientX, e.clientY) ?? -1;
       drag = { kind: "tray", owner, start: cell, current: cell, button: e.button };
@@ -445,9 +452,14 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
       wrap.append(fx);
     }
     session.clearRejected();
-    const main = root.querySelector(".game")!;
+    shake();
+  };
+
+  /** 画面全体を揺らす。 */
+  const shake = () => {
+    const main = root.querySelector<HTMLElement>(".game")!;
     main.classList.remove("shake");
-    void (main as HTMLElement).offsetWidth; // アニメーションをやり直す
+    void main.offsetWidth; // アニメーションをやり直す
     main.classList.add("shake");
   };
 
@@ -502,10 +514,22 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
     const result = session.complete({ [BLACK]: Number(blackInput.value), [WHITE]: Number(whiteInput.value) });
     if (result.ok) {
       finish();
-    } else {
-      flash(`まだ完了していません（+${PENALTY_MS / 1000} 秒）`);
-      render();
+      return;
     }
+    flash(`まだ完了していません（+${PENALTY_MS / 1000} 秒）`);
+    shake();
+    // 誤りの場所に×を付ける
+    errorMarks = new Set(result.errorPoints);
+    // 目数が違う入力欄を強調する
+    for (const [color, input] of [[BLACK, blackInput], [WHITE, whiteInput]] as const) {
+      input.classList.toggle("wrong", result.wrongAnswers.includes(color));
+    }
+    // 場所で示せない誤りは文章で伝える
+    if (result.errorPoints.length === 0) {
+      const other = result.problems.filter((p) => !p.endsWith("の目数が違う"));
+      if (other.length > 0) notice(other.join(" / "));
+    }
+    render();
   });
 
   /** 整地完了: 画面はそのままで、操作を止めて結果をパネルに出す。 */

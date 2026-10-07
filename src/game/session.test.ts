@@ -312,6 +312,28 @@ describe("Session", () => {
     expect(s.penalties).toBe(0);
   });
 
+  it("完了に失敗したら、形の違う区間の場所と目数の違う色を返す", () => {
+    const { s } = session();
+    removeDead(s);
+    const result = s.complete({ [BLACK]: s.initialScores[BLACK], [WHITE]: 0 });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.wrongAnswers).toEqual([WHITE]);
+    // 白地 (6..8, 0..6) は 3x7=21 目で 10 の倍数でも余りでもない。黒地 4x5=20 目は正しい
+    expect(result.errorPoints).toContain(s.board.index(6, 0));
+    expect(result.errorPoints).not.toContain(s.board.index(0, 0));
+  });
+
+  it("地に別の色の石が混ざっていたら、その石の場所を返す", () => {
+    const { s } = session(false, { [BLACK]: 1, [WHITE]: 0 });
+    removeDead(s);
+    s.pickFromTray(BLACK);
+    s.placeAt(s.board.index(1, 1)); // 白石を黒地に（ペナルティになり、印が付く）
+    const result = s.complete(s.initialScores);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errorPoints).toContain(s.board.index(1, 1));
+  });
+
   it("完了の判定とタイム", () => {
     const { s, tick } = session();
     removeDead(s);

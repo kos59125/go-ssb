@@ -34,7 +34,11 @@ export class BoardView {
     this.svg.append(this.stoneLayer, this.overlay);
   }
 
-  render(board: Board, marks: Set<number>, origin: number[]): void {
+  /**
+   * @param marks 間違えて置いた石の印
+   * @param errors 「完了」で見つかった誤りの場所（一時的に表示）
+   */
+  render(board: Board, marks: Set<number>, origin: number[], errors: Set<number> = new Set()): void {
     this.stoneLayer.replaceChildren();
     for (let i = 0; i < board.cells.length; i++) {
       const { x, y } = board.point(i);
@@ -45,6 +49,13 @@ export class BoardView {
         this.stoneLayer.append(el("circle", { cx, cy, r: CELL * 0.47, class: `stone ${color}` }));
       } else if (origin.includes(i)) {
         this.stoneLayer.append(el("circle", { cx, cy, r: CELL * 0.47, class: "origin" }));
+      }
+      if (errors.has(i)) {
+        const d = CELL * 0.3;
+        this.stoneLayer.append(
+          el("circle", { cx, cy, r: CELL * 0.42, class: "error-ring" }),
+          el("path", { d: `M${cx - d} ${cy - d}L${cx + d} ${cy + d}M${cx + d} ${cy - d}L${cx - d} ${cy + d}`, class: "error-mark" }),
+        );
       }
       if (marks.has(i)) {
         const d = CELL * 0.22;
