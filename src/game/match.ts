@@ -55,7 +55,12 @@ export interface PlayerOptions {
   color: Color | null;
   /** 対戦で、担当外の石を操作できないようにするか（仕様書 §3.1）。 */
   restricted?: boolean;
+  /** 一度に持てる石の数の上限（仕様書 §2.3）。省略すると上限なし。 */
+  handLimit?: number;
 }
+
+/** 一度に持てる石の数の上限の初期値。 */
+export const DEFAULT_HAND_LIMIT = 10;
 
 export type CompleteResult =
   | { ok: true }
@@ -230,6 +235,8 @@ export class Player {
   readonly match: Match;
   readonly color: Color | null;
   readonly restricted: boolean;
+  /** 一度に持てる石の数の上限。 */
+  readonly handLimit: number;
   hand: Hand | null = null;
   phase: Phase = "removal";
   penalties = 0;
@@ -245,6 +252,7 @@ export class Player {
     this.match = match;
     this.color = options.color;
     this.restricted = options.restricted ?? false;
+    this.handLimit = Math.max(1, options.handLimit ?? Infinity);
     match.players.push(this);
     this.updatePhase();
   }
@@ -330,9 +338,18 @@ export class Player {
    * 盤上の石を持つ。points は持つ順番に並べる。
    * 石を持っている最中なら、持っている石に追加する（持った順番の最後に並ぶ）。
    */
+  /** あと何個持てるか。 */
+  get handRoom(): number {
+    return this.handLimit - (this.hand?.stones.length ?? 0);
+  }
+
+  /**
+   * 盤上の石を持つ（範囲選択では範囲内の石すべて）。持てる数の上限を超える分は、
+   * points の順（範囲選択では上の行から左→右）で後ろの石を残す。
+   */
   pickUp(points: number[]): boolean {
     if (this.phase === "finished") return false;
-    const stones = points.filter((i) => this.canPick(i));
+    const stones = points.filter((i) => this.canPick(i)).slice(0, Math.max(0, this.handRoom));
     if (stones.length === 0) return false;
     const hand = this.ensureHand();
     for (const i of stones) {
@@ -367,7 +384,7 @@ export class Player {
 
   /** アゲハマトレイから石を count 個持つ。石を持っている最中なら追加する。 */
   pickFromTray(owner: Color, count = 1): boolean {
-    const n = Math.min(count, this.position.trays[owner]);
+    const n = Math.min(count, this.position.trays[owner], this.handRoom);
     if (this.phase !== "arrange" || n <= 0 || !this.canUseTray(owner)) return false;
     const hand = this.ensureHand();
     this.position.trays[owner] -= n;

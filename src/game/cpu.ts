@@ -219,7 +219,7 @@ export class Cpu {
             this.cursor = picked[0];
             return { kind: "pick", point: picked[0] };
           }
-        } else if (p.pickFromTray(opponent(color), Math.min(this.profile.batch, sinks.length))) {
+        } else if (p.pickFromTray(opponent(color), Math.min(this.profile.batch, sinks.length, p.handRoom))) {
           // color の石は、相手（opponent(color)）のトレイにある
           if (this.chance(this.profile.mistake)) this.misplace = true;
           return { kind: "pick-tray" };
@@ -347,7 +347,7 @@ export class Cpu {
     const n = board.size;
     const anchor = this.profile.efficient && this.cursor !== null ? this.cursor : sinks[0];
     const seed = nearest(sources, anchor, n);
-    const limit = Math.min(this.profile.batch, sinks.length);
+    const limit = Math.min(this.profile.batch, sinks.length, this.player.handRoom);
     if (limit <= 1) return [seed];
     const isSource = new Set(sources);
     const sx = seed % n;

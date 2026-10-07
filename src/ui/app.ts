@@ -8,7 +8,7 @@ import { mulberry32, randomSeed, seedNumber } from "../core/random";
 import { dummyPosition } from "../game/dummy";
 import { CPU_LEVELS, Cpu, CpuAction, CpuLevel, isCpuLevel } from "../game/cpu";
 import { planLayouts, SerializedLayout } from "../game/layout";
-import { Match, Player } from "../game/match";
+import { DEFAULT_HAND_LIMIT, Match, Player } from "../game/match";
 import { PENALTY_MS, Session } from "../game/session";
 import { BoardView } from "./boardView";
 import { TRAY_SLOTS, TrayView } from "./trayView";
@@ -23,6 +23,10 @@ interface Settings {
   restricted: boolean;
   size: number;
   undoOnPenalty: boolean;
+  /** 一度に持てる石の数の上限（ひとりで）。 */
+  handLimit: number;
+  /** vs CPU で、黒・白それぞれが一度に持てる石の数の上限。 */
+  handLimits: Record<Color, number>;
   /** 開始時に初手から棋譜を並べるか（仕様書 §5.1）。 */
   replay: boolean;
   /** 終局図を作るシード。保存せず、画面を開くたびにランダムに決める。 */
@@ -140,6 +144,16 @@ function showSettings(root: HTMLElement, settings: Settings): void {
           "元に戻す: ペナルティになった石を、自動で元の場所に戻します。\n" +
           "そのまま: 石は動かさず、間違えた場所に×印を付けます。自分で直すと印は消えます。",
       ),
+      h("fieldset", { class: "radio-group hand-limit-group" }, [
+        legendWithHelp(
+          "一度に持てる石",
+          `範囲選択やトレイから、一度に持てる石の数の上限です（1〜${MAX_HAND_LIMIT} 個、初期値 ${DEFAULT_HAND_LIMIT} 個）。上限を超える分は持ちません。\n` +
+            "vs CPU では黒・白それぞれに設定でき、CPU にも適用します（CPU は強さに応じた数とこの上限の少ない方まで持ちます）。",
+        ),
+        h("label", { class: "solo-limit" }, [handLimitInput("hand-limit", settings.handLimit), "個"]),
+        h("label", { class: "cpu-limit" }, ["黒", handLimitInput("hand-limit-black", settings.handLimits[BLACK]), "個"]),
+        h("label", { class: "cpu-limit" }, ["白", handLimitInput("hand-limit-white", settings.handLimits[WHITE]), "個"]),
+      ]),
       h("fieldset", { class: "radio-group seed-group" }, [
         legendWithHelp("シード", "同じ盤サイズとシードなら同じ終局図になります。画面を開くたびにランダムな値が入ります。"),
         h("input", { type: "text", id: "seed", value: settings.seed, spellcheck: "false", autocomplete: "off" }, []),
@@ -157,6 +171,8 @@ function showSettings(root: HTMLElement, settings: Settings): void {
   const isCpu = () => selected("mode") === "cpu";
   const updateMode = () => {
     root.querySelector<HTMLElement>(".cpu-settings")!.hidden = !isCpu();
+    root.querySelector<HTMLElement>(".solo-limit")!.hidden = isCpu();
+    for (const el of root.querySelectorAll<HTMLElement>(".cpu-limit")) el.hidden = !isCpu();
   };
   for (const input of root.querySelectorAll<HTMLInputElement>('input[name="mode"]')) {
     input.addEventListener("change", updateMode);
@@ -217,6 +233,8 @@ function showSettings(root: HTMLElement, settings: Settings): void {
       restricted: selected("restricted") === "on",
       size: Number(selected("size")),
       undoOnPenalty: selected("undo") === "undo",
+      handLimit: readHandLimit(root, "hand-limit"),
+      handLimits: { [BLACK]: readHandLimit(root, "hand-limit-black"), [WHITE]: readHandLimit(root, "hand-limit-white") },
       replay: selected("start") === "replay",
       seed: seedInput.value.trim() || randomSeed(),
     };
@@ -370,15 +388,15 @@ function showGame(
   let cpu: Cpu | null = null;
   if (cpuMode) {
     const match = new Match(position, { undoOnPenalty: settings.undoOnPenalty });
-    session = new Player(match, { color: myColor, restricted: settings.restricted });
+    session = new Player(match, { color: myColor, restricted: settings.restricted, handLimit: settings.handLimits[myColor] });
     // CPU は人の地（myColor の地）を整地する
     // CPU のミスや無駄な操作の乱数は、終局図のシードとは別に毎回ランダムに決める
-    cpu = new Cpu(new Player(match, { color: cpuColor }), layouts ?? {}, {
+    cpu = new Cpu(new Player(match, { color: cpuColor, handLimit: settings.handLimits[cpuColor] }), layouts ?? {}, {
       level: settings.cpuLevel,
       random: mulberry32(seedNumber(randomSeed())),
     });
   } else {
-    session = new Session(position, { undoOnPenalty: settings.undoOnPenalty });
+    session = new Session(position, { undoOnPenalty: settings.undoOnPenalty, handLimit: settings.handLimit });
   }
   const cpuPlayer = cpu?.player ?? null;
   // 自分が白なら盤を 180° 回して表示する（仕様書 §4）
@@ -566,6 +584,10 @@ function showGame(
       notice("死に石をすべて取り上げると、アゲハマを持てます。");
       return;
     }
+    if (session.handRoom <= 0) {
+      notice(`一度に持てる石は ${session.handLimit} 個までです。`);
+      return;
+    }
     session.pickFromTray(owner, count);
   };
 
@@ -584,6 +606,10 @@ function showGame(
   };
 
   const pickUp = (points: number[]) => {
+    if (session.handRoom <= 0 && points.some((i) => session.board.cells[i] !== EMPTY)) {
+      notice(`一度に持てる石は ${session.handLimit} 個までです。`);
+      return;
+    }
     if (!session.pickUp(points) && session.restricted && points.some((i) => session.board.cells[i] !== EMPTY)) {
       notice(`担当外の石は動かせません（設定で制限しています）。動かせるのは${colorName(cpuColor)}石と、${colorName(cpuColor)}石に接している境界線の石だけです。`);
     }
@@ -1073,6 +1099,22 @@ function recordLabel(record: GameRecord): string {
 }
 
 /** 設定項目のラジオボタン群。 */
+/** 一度に持てる石の数の上限として選べる最大値。 */
+const MAX_HAND_LIMIT = 99;
+
+function clampHandLimit(value: unknown): number {
+  const n = Math.round(Number(value));
+  return Number.isFinite(n) && n >= 1 ? Math.min(MAX_HAND_LIMIT, n) : DEFAULT_HAND_LIMIT;
+}
+
+function handLimitInput(id: string, value: number): HTMLInputElement {
+  return h("input", { type: "number", id, min: "1", max: String(MAX_HAND_LIMIT), step: "1", value: String(value), inputmode: "numeric" }, []);
+}
+
+function readHandLimit(root: HTMLElement, id: string): number {
+  return clampHandLimit(root.querySelector<HTMLInputElement>(`#${id}`)!.value);
+}
+
 function radioGroup(
   legend: string,
   name: string,
@@ -1187,6 +1229,8 @@ function loadSettings(): Settings {
     restricted: true,
     size: 19,
     undoOnPenalty: true,
+    handLimit: DEFAULT_HAND_LIMIT,
+    handLimits: { [BLACK]: DEFAULT_HAND_LIMIT, [WHITE]: DEFAULT_HAND_LIMIT },
     replay: false,
     seed: randomSeed(),
   };
@@ -1194,6 +1238,11 @@ function loadSettings(): Settings {
     const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "{}");
     const settings = { ...fallback, ...saved, seed: fallback.seed };
     if (!isCpuLevel(settings.cpuLevel)) settings.cpuLevel = fallback.cpuLevel;
+    settings.handLimit = clampHandLimit(settings.handLimit);
+    settings.handLimits = {
+      [BLACK]: clampHandLimit(settings.handLimits?.[BLACK]),
+      [WHITE]: clampHandLimit(settings.handLimits?.[WHITE]),
+    };
     return settings;
   } catch {
     return fallback;

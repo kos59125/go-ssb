@@ -79,4 +79,24 @@ describe("対戦（2 人で同じ盤を操作）", () => {
       void size;
     }
   });
+
+  it("一度に持てる石は上限まで（範囲選択でもトレイからでも）", () => {
+    const match = new Match({ board: parseBoard(BOARD), trays: { [BLACK]: 3, [WHITE]: 3 } }, { undoOnPenalty: true });
+    const black = new Player(match, { color: BLACK, handLimit: 2 });
+    const white = new Player(match, { color: WHITE, handLimit: 4 });
+    match.begin();
+    // 黒: 白石 3 個を範囲選択しても 2 個だけ持つ（上の行から）
+    expect(black.pickUp([0 * 9 + 4, 1 * 9 + 4, 2 * 9 + 4])).toBe(true);
+    expect(black.hand!.stones.map((s) => (s.source as { point: number }).point)).toEqual([4, 13]);
+    expect(black.board.cells[2 * 9 + 4]).toBe(WHITE);
+    expect(black.pickUp([3 * 9 + 4])).toBe(false);
+    expect(black.pickFromTray(BLACK)).toBe(false);
+    // 白: トレイから 3 個持つと、残りは 1 個
+    expect(white.pickFromTray(WHITE, 3)).toBe(true);
+    expect(white.handRoom).toBe(1);
+    expect(white.pickFromTray(WHITE, 3)).toBe(false); // トレイは空
+    expect(white.pickUp([0 * 9 + 3, 1 * 9 + 3])).toBe(true);
+    expect(white.hand!.stones.length).toBe(4);
+  });
 });
+

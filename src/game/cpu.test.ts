@@ -179,4 +179,24 @@ describe("Cpu", () => {
     expect(expert.maxHand).toBeGreaterThan(1);
     expect(expert.steps).toBeLessThan(run("easy").steps);
   });
+
+  it("CPU も一度に持てる石の上限を守る", () => {
+    const position = { board: makeBoard(), trays: { [BLACK]: 4, [WHITE]: 4 } };
+    const match = new Match(position, { undoOnPenalty: true });
+    const human = new Player(match, { color: BLACK });
+    const cpuPlayer = new Player(match, { color: WHITE, handLimit: 2 });
+    const cpu = new Cpu(cpuPlayer, planLayouts(position), { level: "expert" });
+    match.begin();
+    human.capture(1 * 11 + 1);
+    let steps = 0;
+    let maxHand = 0;
+    while (cpuPlayer.phase !== "finished" && steps < 200) {
+      cpu.step();
+      maxHand = Math.max(maxHand, cpuPlayer.hand?.stones.length ?? 0);
+      steps++;
+    }
+    expect(cpuPlayer.phase).toBe("finished");
+    expect(maxHand).toBe(2);
+  });
 });
+

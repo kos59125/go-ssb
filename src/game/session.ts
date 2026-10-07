@@ -5,7 +5,10 @@ import { Match, MatchOptions, Player } from "./match";
 export { PENALTY_MS } from "./match";
 export type { CompleteResult, Hand, HeldStone, Phase, Source } from "./match";
 
-export type SessionOptions = MatchOptions;
+export interface SessionOptions extends MatchOptions {
+  /** 一度に持てる石の数の上限。 */
+  handLimit?: number;
+}
 
 /**
  * ひとりでモードの 1 ゲーム（仕様書 §2, §3.2）。
@@ -14,7 +17,7 @@ export type SessionOptions = MatchOptions;
  */
 export class Session extends Player {
   constructor(position: Position, options: SessionOptions) {
-    super(new Match(position, options), { color: null });
+    super(new Match(position, options), { color: null, handLimit: options.handLimit });
   }
 
   /**

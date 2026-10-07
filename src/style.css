@@ -372,6 +372,11 @@ button.primary {
   color: var(--muted);
 }
 
+.hand-limit-group input {
+  width: 4.5em;
+  font-variant-numeric: tabular-nums;
+}
+
 .seed-group input {
   flex: 1;
   min-width: 8em;
