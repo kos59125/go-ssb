@@ -109,5 +109,20 @@ describe("対戦（2 人で同じ盤を操作）", () => {
     expect(black.pickUp(byDistanceFrom(9, rect, 7 * 9 + 5))).toBe(true);
     expect(black.hand!.stones.map((s) => (s.source as { point: number }).point)).toEqual([7 * 9 + 5, 6 * 9 + 5, 7 * 9 + 4]);
   });
+
+  it("相手が石を持っている最中（目数が一時的に変わって見える）でも、正しく置いた側はペナルティにならない", () => {
+    const { match, black, white } = battle(false);
+    // 白が自分の塊の中央 (6,6) を持ち上げたまま（白地が一時的に 1 目増えて見える）
+    expect(white.pickUp([6 * 9 + 6])).toBe(true);
+    // 黒が白地にアゲハマを正しく埋める
+    expect(black.pickFromTray(BLACK)).toBe(true);
+    expect(black.placeAt(0 * 9 + 8, WHITE)).toBe(true);
+    expect(black.penalties).toBe(0);
+    expect(match.scores()).toEqual(match.initialScores);
+    // 白が元に戻しても誰もペナルティにならない
+    white.cancel();
+    expect(white.penalties).toBe(0);
+    expect(black.penalties).toBe(0);
+  });
 });
 

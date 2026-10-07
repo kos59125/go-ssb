@@ -135,17 +135,40 @@ export class Match {
     this.startedAt ??= this.now();
   }
 
+  /**
+   * 判定に使う局面: プレイヤーが持っている石を、すべて持ち出した場所（盤の点かトレイ）に戻したとみなす。
+   * 対戦では相手が石を持っている最中にも自分の判定が行われるので、持っている石で目数や境界が
+   * 一時的に変わって見えても、それを自分のせいにしないため。
+   */
+  restingPosition(): Position {
+    if (this.players.every((p) => !p.hand)) return this.position;
+    const board = this.board.clone();
+    const trays = { ...this.position.trays };
+    for (const p of this.players) {
+      for (const stone of p.hand?.stones ?? []) {
+        const { source } = stone;
+        if (source.kind === "tray") trays[source.owner]++;
+        else if (board.cells[source.point] === EMPTY) {
+          board.set(source.point % board.size, Math.floor(source.point / board.size), stone.color, stone.dead);
+        }
+      }
+    }
+    return { board, trays };
+  }
+
+  /** 目数（持っている石は元の場所にあるとみなす）。 */
   scores(): Record<Color, number> {
-    const analysis = analyze(this.board);
+    const position = this.restingPosition();
+    const analysis = analyze(position.board);
     return {
-      [BLACK]: score(this.position, BLACK, analysis),
-      [WHITE]: score(this.position, WHITE, analysis),
+      [BLACK]: score(position, BLACK, analysis),
+      [WHITE]: score(position, WHITE, analysis),
     };
   }
 
-  /** 境界が開いているか（どちらの地でもない空点が開始時より多い）。 */
+  /** 境界が開いているか（どちらの地でもない空点が開始時より多い。持っている石は元の場所にあるとみなす）。 */
   get boundaryOpen(): boolean {
-    return openPoints(this.board) > this.baseOpenPoints.size;
+    return openPoints(this.restingPosition().board) > this.baseOpenPoints.size;
   }
 
   /**
@@ -156,7 +179,8 @@ export class Match {
   culprits(): Player[] {
     return this.players.filter((p) => {
       if (p.pendingMoves.length === 0) return false;
-      const position = { board: this.board.clone(), trays: { ...this.position.trays } };
+      const resting = this.restingPosition();
+      const position = { board: resting.board.clone(), trays: { ...resting.trays } };
       for (const other of this.players) if (other !== p) revertMoves(position, other.pendingMoves);
       if (openPoints(position.board) > this.baseOpenPoints.size) return false;
       const analysis = analyze(position.board);
@@ -201,19 +225,20 @@ export class Match {
 
   /** 境界が閉じていて目数が正しい状態として記録する。 */
   markSettled(): void {
+    const board = this.restingPosition().board;
     this.settledScores = this.scores();
-    this.settledOwner = new Uint8Array(this.board.cells.length);
-    for (const region of analyze(this.board).regions) {
+    this.settledOwner = new Uint8Array(board.cells.length);
+    for (const region of analyze(board).regions) {
       if (!region.territory || region.owner === null) continue;
       for (const i of region.points) this.settledOwner[i] = region.owner;
     }
-    this.settledColor = colorMap(this.board);
+    this.settledColor = colorMap(board);
     for (const p of this.players) p.clearPending();
   }
 
   /** 最後に境界が閉じていた時点から、持ち主（石の色または地の色、どちらでもない）が変わった点。 */
   changedPoints(): number[] {
-    const now = colorMap(this.board);
+    const now = colorMap(this.restingPosition().board);
     const points: number[] = [];
     for (let i = 0; i < now.length; i++) if (this.settledColor[i] !== now[i]) points.push(i);
     return points;
@@ -221,7 +246,7 @@ export class Match {
 
   /** 最後に境界が閉じていた時点から、持ち主（石の色または地の色）が黒⇔白で入れ替わった点。 */
   flippedPoints(): number[] {
-    const now = colorMap(this.board);
+    const now = colorMap(this.restingPosition().board);
     const points: number[] = [];
     for (let i = 0; i < now.length; i++) {
       const before = this.settledColor[i];
