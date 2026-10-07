@@ -50,12 +50,92 @@ button.primary {
 }
 
 .settings {
-  max-width: 420px;
+  max-width: 480px;
   margin: 0 auto;
   padding: 32px 16px;
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+/* 設定画面: まとまりごとに枠で囲み、項目は枠の中に並べる */
+.setting-group {
+  position: relative;
+  margin: 0;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.setting-group h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.setting {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.setting + .setting {
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.setting-label {
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.setting-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 18px;
+}
+
+.setting-options label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.setting-options input[type="radio"] {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.setting-options label:has(input:disabled) {
+  color: var(--muted);
+  cursor: default;
+}
+
+.setting-options .note {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.seed-setting input[type="text"] {
+  flex: 1;
+  min-width: 8em;
+  font-variant-numeric: tabular-nums;
+}
+
+.setting-options input[type="number"] {
+  width: 4.5em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 説明の吹き出しは、まとまりの枠の右外側に出す（項目の位置から枠の端までの余白 16px を足す） */
+.setting .help-bubble {
+  left: calc(100% + 16px + 14px);
 }
 
 .radio-group {
@@ -370,17 +450,6 @@ button.primary {
 .radio-group.compact legend {
   font-weight: normal;
   color: var(--muted);
-}
-
-.hand-limit-group input {
-  width: 4.5em;
-  font-variant-numeric: tabular-nums;
-}
-
-.seed-group input {
-  flex: 1;
-  min-width: 8em;
-  font-variant-numeric: tabular-nums;
 }
 
 .seed-note {
@@ -773,7 +842,8 @@ body.holding .tray {
 
 /* 狭い画面では右に出す余白がないので、項目の枠の下に出す */
 @media (max-width: 768px) {
-  .help-bubble {
+  .help-bubble,
+  .setting .help-bubble {
     left: 0;
     right: 0;
     top: calc(100% + 10px);

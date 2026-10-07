@@ -4,6 +4,7 @@ import { Evaluation, Evaluator } from "./model";
 import { GoGame, Move, PASS } from "./go";
 import type { GameRecord } from "./sgf";
 import { SerializedLayout, planLayouts } from "../game/layout";
+import { DEFAULT_SHAPE_RULES, ShapeRules } from "../core/shapes";
 
 export const KOMI = 6.5;
 
@@ -38,6 +39,8 @@ export interface GenerateOptions {
   onReject?: (reason: string) => void;
   /** vs CPU 用: CPU が整地できる（黒地・白地とも整地の形が見つかる）局面だけを作る。 */
   forCpu?: boolean;
+  /** 整地の形の追加ルール（forCpu で形を探すときに使う）。 */
+  rules?: ShapeRules;
 }
 
 export class GenerationCancelled extends Error {
@@ -50,7 +53,12 @@ export class GenerationCancelled extends Error {
  * 実戦の終局済みの棋譜（SGF）から整地用の局面を作る。死に石は KataGo の所有権で判定し、
  * 残ったダメは埋める。作り直しはできないので、判定に引っかかってもそのまま使う。
  */
-export async function finishRecord(evaluate: Evaluator, record: GameRecord, forCpu = false): Promise<GeneratedGame> {
+export async function finishRecord(
+  evaluate: Evaluator,
+  record: GameRecord,
+  forCpu = false,
+  rules: ShapeRules = DEFAULT_SHAPE_RULES,
+): Promise<GeneratedGame> {
   const game = new GoGame(record.size);
   for (const { point, color } of record.setup) if (point !== PASS) game.setup(point, color);
   for (const [k, move] of record.moves.entries()) {
@@ -60,7 +68,7 @@ export async function finishRecord(evaluate: Evaluator, record: GameRecord, forC
   }
   const finished = await finish(evaluate, game, { random: Math.random, record });
   // 実戦の棋譜は作り直せないので、整地の形が見つからない色は null のまま渡す
-  const layouts = forCpu ? planLayouts(finished!.position) : undefined;
+  const layouts = forCpu ? planLayouts(finished!.position, rules) : undefined;
   return { ...finished!, result: record.result ?? finished!.result, layouts };
 }
 
@@ -75,7 +83,7 @@ export async function generateGame(evaluate: Evaluator, options: GenerateOptions
     const finished = await finish(evaluate, game, { random: options.random ?? Math.random, reject: options.onReject });
     if (!finished) continue;
     if (!options.forCpu) return finished;
-    const layouts = planLayouts(finished.position);
+    const layouts = planLayouts(finished.position, options.rules);
     if (layouts[BLACK] && layouts[WHITE]) return { ...finished, layouts };
     options.onReject?.("layout");
   }

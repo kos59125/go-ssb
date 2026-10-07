@@ -28,10 +28,10 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
 };
 
 /** 実戦の棋譜から整地用の局面を作る。 */
-async function handleRecord({ id, record, forCpu, modelUrl }: Extract<WorkerRequest, { type: "record" }>): Promise<void> {
+async function handleRecord({ id, record, forCpu, rules, modelUrl }: Extract<WorkerRequest, { type: "record" }>): Promise<void> {
   try {
     const evaluate = await getEvaluator(modelUrl);
-    const { position, ...rest } = await finishRecord(evaluate, record, forCpu);
+    const { position, ...rest } = await finishRecord(evaluate, record, forCpu, rules);
     self.postMessage({
       type: "done",
       id,
@@ -42,7 +42,7 @@ async function handleRecord({ id, record, forCpu, modelUrl }: Extract<WorkerRequ
   }
 }
 
-async function handle({ id, size, seed, forCpu, modelUrl }: Extract<WorkerRequest, { type: "generate" }>): Promise<void> {
+async function handle({ id, size, seed, forCpu, rules, modelUrl }: Extract<WorkerRequest, { type: "generate" }>): Promise<void> {
   const post = (msg: WorkerResponse) => self.postMessage(msg);
   try {
     const evaluate = await getEvaluator(modelUrl);
@@ -50,6 +50,7 @@ async function handle({ id, size, seed, forCpu, modelUrl }: Extract<WorkerReques
       size,
       random: mulberry32(seed),
       forCpu,
+      rules,
       onMove: (move) => post({ type: "progress", id, move }),
       shouldStop: () => cancelled.has(id),
     });

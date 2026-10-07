@@ -6,6 +6,7 @@ import { Position, analyze } from "../core/analysis";
 import { BLACK, Board, Color, EMPTY, WHITE, opponent } from "../core/board";
 import { mulberry32, randomSeed, seedNumber } from "../core/random";
 import { dummyPosition } from "../game/dummy";
+import { DEFAULT_SHAPE_RULES, type ShapeRules } from "../core/shapes";
 import { CPU_LEVELS, Cpu, CpuAction, CpuLevel, isCpuLevel } from "../game/cpu";
 import { planLayout, planLayouts, SerializedLayout } from "../game/layout";
 import { DEFAULT_HAND_LIMIT, Match, Player, byDistanceFrom } from "../game/match";
@@ -27,6 +28,8 @@ interface Settings {
   handLimit: number;
   /** vs CPU で、黒・白それぞれが一度に持てる石の数の上限。 */
   handLimits: Record<Color, number>;
+  /** 整地ルール（1 列の区間、5 × 奇数）。 */
+  shapeRules: ShapeRules;
   /** 開始時に初手から棋譜を並べるか（仕様書 §5.1）。 */
   replay: boolean;
   /** 終局図を作るシード。保存せず、画面を開くたびにランダムに決める。 */
@@ -61,106 +64,139 @@ function dummySeed(): number | null {
 function showSettings(root: HTMLElement, settings: Settings): void {
   const small = isSmallScreen();
   if (small && settings.size === 19) settings.size = 13;
+  const levels = Object.keys(CPU_LEVELS) as CpuLevel[];
   root.replaceChildren(
     h("main", { class: "settings" }, [
       h("h1", {}, ["囲碁スピード整地バトル"]),
-      radioGroup(
-        "モード",
-        "mode",
-        [
-          { value: "solo", label: "ひとりで", checked: settings.mode === "solo" },
-          { value: "cpu", label: "vs CPU", checked: settings.mode === "cpu" },
-        ],
-        "ひとりで: 黒地と白地を両方整地して、タイムを競います。\nvs CPU: 相手の地を整地します。ペナルティ込みのタイムが短い方が勝ちです。",
-      ),
-      h("div", { class: "cpu-settings" }, [
-        radioGroup(
+      settingGroup("対戦", [
+        setting(
+          "モード",
+          radios("mode", [
+            { value: "solo", label: "ひとりで", checked: settings.mode === "solo" },
+            { value: "cpu", label: "vs CPU", checked: settings.mode === "cpu" },
+          ]),
+          "ひとりで: 黒地と白地を両方整地して、タイムを競います。\nvs CPU: 相手の地を整地します。ペナルティ込みのタイムが短い方が勝ちです。",
+        ),
+        setting(
           "自分の石",
-          "my-color",
-          [
+          radios("my-color", [
             { value: "black", label: "黒（白地を整地）", checked: settings.myColor === BLACK },
             { value: "white", label: "白（黒地を整地）", checked: settings.myColor === WHITE },
-          ],
+          ]),
           "囲碁の慣例どおり、相手の地を整地します。白のときは盤を 180° 回して表示します。",
+          "cpu-only",
         ),
-        radioGroup(
+        setting(
           "CPU の強さ",
-          "cpu-level",
-          (Object.keys(CPU_LEVELS) as CpuLevel[]).map((level) => ({
-            value: level,
-            label: CPU_LEVELS[level].label,
-            checked: settings.cpuLevel === level,
-          })),
+          radios(
+            "cpu-level",
+            levels.map((level) => ({ value: level, label: CPU_LEVELS[level].label, checked: settings.cpuLevel === level })),
+          ),
           "強さによって、CPU が 1 回操作する間隔と、ミスの多さが変わります。\n" +
-            (Object.keys(CPU_LEVELS) as CpuLevel[])
-              .map((level) => `${CPU_LEVELS[level].label}: ${CPU_LEVELS[level].interval / 1000} 秒ごと、${MISTAKE_TEXT[level]}`)
-              .join("\n"),
+            levels.map((level) => `${CPU_LEVELS[level].label}: ${CPU_LEVELS[level].interval / 1000} 秒ごと、${MISTAKE_TEXT[level]}`).join("\n"),
+          "cpu-only",
         ),
-        radioGroup(
-          "担当外の石の操作",
-          "restricted",
+      ]),
+      settingGroup("盤面", [
+        setting(
+          "終局図",
+          radios("source", [
+            { value: "katago", label: "自動で作る", checked: !settings.record },
+            { value: "sgf", label: "SGF を読み込む", checked: !!settings.record },
+          ]),
+          "自動で作る: KataGo の自動対局でその場で作ります。初回はネットワーク（約 4 MB）を読み込みます。\nSGF を読み込む: 終局済みの実戦の棋譜で遊びます。",
+        ),
+        setting(
+          "SGF ファイル",
           [
+            h("input", { type: "file", id: "sgf-file", accept: ".sgf,application/x-go-sgf" }, []),
+            h("p", { class: "note", id: "sgf-info" }, [settings.record ? recordLabel(settings.record) : "終局済みの棋譜を選んでください。"]),
+          ],
+          undefined,
+          "sgf-only",
+        ),
+        setting(
+          "盤のサイズ",
+          radios("size", [
+            { value: "19", label: "19 路", checked: settings.size === 19, disabled: small },
+            { value: "13", label: "13 路", checked: settings.size === 13 },
+            { value: "9", label: "9 路", checked: settings.size === 9 },
+          ]),
+          undefined,
+          "katago-only",
+        ),
+        setting(
+          "シード",
+          [
+            h("input", { type: "text", id: "seed", value: settings.seed, spellcheck: "false", autocomplete: "off" }, []),
+            h("button", { type: "button", id: "reseed" }, ["別のシード"]),
+          ],
+          "同じ盤サイズとシードなら同じ終局図になります。画面を開くたびにランダムな値が入ります。",
+          "katago-only seed-setting",
+        ),
+        setting(
+          "開始時の表示",
+          radios("start", [
+            { value: "final", label: "終局図から", checked: !settings.replay },
+            { value: "replay", label: "初手から並べる", checked: settings.replay },
+          ]),
+          "初手から並べる: 棋譜を 10 秒で再生してから整地を始めます。",
+        ),
+      ]),
+      settingGroup("整地ルール", [
+        setting(
+          "1 列の区間",
+          radios("one-line", [
+            { value: "off", label: "制限なし", checked: settings.shapeRules.oneLineFrom === null },
+            { value: "10", label: "10 目以上は禁止", checked: settings.shapeRules.oneLineFrom === 10 },
+            { value: "5", label: "5 目以上は禁止", checked: settings.shapeRules.oneLineFrom === 5 },
+          ]),
+          "1 列（幅か高さが 1）の区間を認めるかどうかです。\n" +
+            "10 目以上は禁止: 1x10 などは不可（2x5、3x4−2 などにする）。\n" +
+            "5 目以上は禁止: 加えて、5〜9 目の余りも 2 列以上にする（例: 2x2+1、2x3、3x3）。\n" +
+            "CPU は設定によらず、できるだけ 1 列の区間を作りません。",
+        ),
+        setting(
+          "5 × 奇数",
+          radios("five-by-odd", [
+            { value: "off", label: "認めない", checked: !settings.shapeRules.allowFiveByOdd },
+            { value: "on", label: "認める", checked: settings.shapeRules.allowFiveByOdd },
+          ]),
+          "認める: 3x5 = 15 目、5x5 = 25 目のような、一辺が 5 で他方が奇数の矩形も区間として数えます。",
+        ),
+      ]),
+      settingGroup("操作", [
+        setting(
+          "一度に持てる石",
+          [
+            h("label", { class: "solo-only" }, [handLimitInput("hand-limit", settings.handLimit), "個"]),
+            h("label", { class: "cpu-only" }, ["黒", handLimitInput("hand-limit-black", settings.handLimits[BLACK]), "個"]),
+            h("label", { class: "cpu-only" }, ["白", handLimitInput("hand-limit-white", settings.handLimits[WHITE]), "個"]),
+          ],
+          `範囲選択やトレイから、一度に持てる石の数の上限です（1〜${MAX_HAND_LIMIT} 個、初期値 ${DEFAULT_HAND_LIMIT} 個）。上限を超えるときは、選び始めた点に近い石から持ちます。\n` +
+            "vs CPU では黒・白それぞれに設定でき、CPU にも適用します（CPU は強さに応じた数とこの上限の少ない方まで持ちます）。",
+        ),
+        setting(
+          "担当外の石の操作",
+          radios("restricted", [
             { value: "on", label: "制限あり", checked: settings.restricted },
             { value: "off", label: "制限なし", checked: !settings.restricted },
-          ],
+          ]),
           "担当外の石とは、あなたが整地しない側の石です。vs CPU では、あなたは CPU の地を、CPU はあなたの地を整地します。\n" +
             "制限あり: 動かせるのは相手の色の石と、相手の石に接している自分の色の石（黒白の境界線の石）だけです。自分の地の側の石（例: 自分の石の塊の中央）は動かせません。CPU が整地しているあなたの地には石を置けません。\n" +
             "制限なし: どの石も動かせます（CPU の整地を邪魔することもできます）。",
+          "cpu-only",
         ),
-      ]),
-      radioGroup(
-        "終局図",
-        "source",
-        [
-          { value: "katago", label: "自動で作る", checked: !settings.record },
-          { value: "sgf", label: "SGF を読み込む", checked: !!settings.record },
-        ],
-        "自動で作る: KataGo の自動対局でその場で作ります。初回はネットワーク（約 4 MB）を読み込みます。\nSGF を読み込む: 終局済みの実戦の棋譜で遊びます。",
-      ),
-      h("fieldset", { class: "radio-group sgf-group" }, [
-        h("legend", {}, ["SGF ファイル（終局済みの棋譜）"]),
-        h("input", { type: "file", id: "sgf-file", accept: ".sgf,application/x-go-sgf" }, []),
-        h("p", { class: "note", id: "sgf-info" }, [settings.record ? recordLabel(settings.record) : "ファイルを選んでください。"]),
-      ]),
-      radioGroup("盤のサイズ", "size", [
-        { value: "19", label: "19 路", checked: settings.size === 19, disabled: small },
-        { value: "13", label: "13 路", checked: settings.size === 13 },
-        { value: "9", label: "9 路", checked: settings.size === 9 },
-      ]),
-      radioGroup(
-        "開始時の表示",
-        "start",
-        [
-          { value: "final", label: "終局図から", checked: !settings.replay },
-          { value: "replay", label: "初手から並べる", checked: settings.replay },
-        ],
-        "初手から並べる: 棋譜を 10 秒で再生してから整地を始めます。",
-      ),
-      radioGroup(
-        "ペナルティ時の石",
-        "undo",
-        [
-          { value: "undo", label: "元に戻す", checked: settings.undoOnPenalty },
-          { value: "keep", label: "そのまま（印を付ける）", checked: !settings.undoOnPenalty },
-        ],
-        "地の目数が変わる置き方をすると、+5 秒のペナルティになります（例: アゲハマを相手の地に置いた、境界を崩したまま閉じた）。\n" +
-          "元に戻す: ペナルティになった石を、自動で元の場所に戻します。\n" +
-          "そのまま: 石は動かさず、間違えた場所に×印を付けます。自分で直すと印は消えます。",
-      ),
-      h("fieldset", { class: "radio-group hand-limit-group" }, [
-        legendWithHelp(
-          "一度に持てる石",
-          `範囲選択やトレイから、一度に持てる石の数の上限です（1〜${MAX_HAND_LIMIT} 個、初期値 ${DEFAULT_HAND_LIMIT} 個）。上限を超える分は持ちません。\n` +
-            "vs CPU では黒・白それぞれに設定でき、CPU にも適用します（CPU は強さに応じた数とこの上限の少ない方まで持ちます）。",
+        setting(
+          "ペナルティ時の石",
+          radios("undo", [
+            { value: "undo", label: "元に戻す", checked: settings.undoOnPenalty },
+            { value: "keep", label: "そのまま（印を付ける）", checked: !settings.undoOnPenalty },
+          ]),
+          "地の目数が変わる置き方をすると、+5 秒のペナルティになります（例: アゲハマを相手の地に置いた、境界を崩したまま閉じた）。\n" +
+            "元に戻す: ペナルティになった石を、自動で元の場所に戻します。\n" +
+            "そのまま: 石は動かさず、間違えた場所に×印を付けます。自分で直すと印は消えます。",
         ),
-        h("label", { class: "solo-limit" }, [handLimitInput("hand-limit", settings.handLimit), "個"]),
-        h("label", { class: "cpu-limit" }, ["黒", handLimitInput("hand-limit-black", settings.handLimits[BLACK]), "個"]),
-        h("label", { class: "cpu-limit" }, ["白", handLimitInput("hand-limit-white", settings.handLimits[WHITE]), "個"]),
-      ]),
-      h("fieldset", { class: "radio-group seed-group" }, [
-        legendWithHelp("シード", "同じ盤サイズとシードなら同じ終局図になります。画面を開くたびにランダムな値が入ります。"),
-        h("input", { type: "text", id: "seed", value: settings.seed, spellcheck: "false", autocomplete: "off" }, []),
-        h("button", { type: "button", id: "reseed" }, ["別のシード"]),
       ]),
       h("button", { id: "start-button", class: "primary" }, ["スタート"]),
       h("p", { class: "links" }, [h("a", { href: "https://github.com/kos59125/go-ssb/blob/main/docs/rulebook.md", target: "_blank" }, ["ルールブック"])]),
@@ -173,9 +209,8 @@ function showSettings(root: HTMLElement, settings: Settings): void {
   let record = settings.record;
   const isCpu = () => selected("mode") === "cpu";
   const updateMode = () => {
-    root.querySelector<HTMLElement>(".cpu-settings")!.hidden = !isCpu();
-    root.querySelector<HTMLElement>(".solo-limit")!.hidden = isCpu();
-    for (const el of root.querySelectorAll<HTMLElement>(".cpu-limit")) el.hidden = !isCpu();
+    for (const el of root.querySelectorAll<HTMLElement>(".cpu-only")) el.hidden = !isCpu();
+    for (const el of root.querySelectorAll<HTMLElement>(".solo-only")) el.hidden = isCpu();
   };
   for (const input of root.querySelectorAll<HTMLInputElement>('input[name="mode"]')) {
     input.addEventListener("change", updateMode);
@@ -183,9 +218,8 @@ function showSettings(root: HTMLElement, settings: Settings): void {
   // SGF のときは、盤のサイズとシードは棋譜で決まるので表示しない
   const updateSource = () => {
     const sgf = selected("source") === "sgf";
-    root.querySelector<HTMLElement>(".sgf-group")!.hidden = !sgf;
-    root.querySelector<HTMLElement>(".seed-group")!.hidden = sgf;
-    root.querySelector<HTMLElement>('input[name="size"]')!.closest("fieldset")!.hidden = sgf;
+    for (const el of root.querySelectorAll<HTMLElement>(".sgf-only")) el.hidden = !sgf;
+    for (const el of root.querySelectorAll<HTMLElement>(".katago-only")) el.hidden = sgf;
     startButton.disabled = sgf && !record;
   };
   for (const input of root.querySelectorAll<HTMLInputElement>('input[name="source"]')) {
@@ -207,14 +241,19 @@ function showSettings(root: HTMLElement, settings: Settings): void {
   });
   updateSource();
   // 設定を選んでいる間に、裏で終局図を作っておく
+  const shapeRules = (): ShapeRules => ({
+    oneLineFrom: selected("one-line") === "off" ? null : Number(selected("one-line")),
+    allowFiveByOdd: selected("five-by-odd") === "on",
+  });
   function prefetch() {
     if (!dummySeed() && seedInput.value.trim()) {
-      generator.prefetch(Number(selected("size")), seedNumber(seedInput.value), true);
+      generator.prefetch(Number(selected("size")), seedNumber(seedInput.value), true, shapeRules());
     }
   }
   updateMode();
   prefetch();
-  for (const input of root.querySelectorAll<HTMLInputElement>('input[name="size"]')) {
+  // 整地ルールが変わると、CPU が整地できる局面も変わる
+  for (const input of root.querySelectorAll<HTMLInputElement>('input[name="size"], input[name="one-line"], input[name="five-by-odd"]')) {
     input.addEventListener("change", prefetch);
   }
   let seedTimer = 0;
@@ -238,6 +277,7 @@ function showSettings(root: HTMLElement, settings: Settings): void {
       undoOnPenalty: selected("undo") === "undo",
       handLimit: readHandLimit(root, "hand-limit"),
       handLimits: { [BLACK]: readHandLimit(root, "hand-limit-black"), [WHITE]: readHandLimit(root, "hand-limit-white") },
+      shapeRules: shapeRules(),
       replay: selected("start") === "replay",
       seed: seedInput.value.trim() || randomSeed(),
     };
@@ -254,7 +294,7 @@ async function prepareGame(root: HTMLElement, settings: Settings): Promise<void>
   const dummy = dummySeed();
   if (dummy) {
     const position = dummyPosition(settings.size, dummy);
-    showGame(root, settings, position, nextSeed, planLayouts(position));
+    showGame(root, settings, position, nextSeed, planLayouts(position, settings.shapeRules));
     return;
   }
 
@@ -276,8 +316,8 @@ async function prepareGame(root: HTMLElement, settings: Settings): Promise<void>
   let game: GeneratedGame;
   try {
     game = settings.record
-      ? await generator.fromRecord(settings.record, forCpu)
-      : await generator.take(settings.size, seed, forCpu, (move) => (status.textContent = `自動対局中… ${move} 手目`));
+      ? await generator.fromRecord(settings.record, forCpu, settings.shapeRules)
+      : await generator.take(settings.size, seed, forCpu, settings.shapeRules, (move) => (status.textContent = `自動対局中… ${move} 手目`));
   } catch (err) {
     if (cancelled) return;
     if (settings.record) {
@@ -291,7 +331,7 @@ async function prepareGame(root: HTMLElement, settings: Settings): Promise<void>
     const fallback = h("button", { class: "primary" }, ["仮の局面で遊ぶ"]);
     fallback.addEventListener("click", () => {
       const position = dummyPosition(settings.size, seed);
-      showGame(root, settings, position, nextSeed, planLayouts(position));
+      showGame(root, settings, position, nextSeed, planLayouts(position, settings.shapeRules));
     });
     status.after(fallback);
     return;
@@ -302,7 +342,7 @@ async function prepareGame(root: HTMLElement, settings: Settings): Promise<void>
     status.textContent = "この棋譜は、CPU が整地できる形が見つかりませんでした。ひとりでモードで遊んでください。";
     return;
   }
-  if (!settings.record) generator.prefetch(settings.size, seedNumber(nextSeed), forCpu);
+  if (!settings.record) generator.prefetch(settings.size, seedNumber(nextSeed), forCpu, settings.shapeRules);
   if (settings.replay) await replayGame(root, game);
   showGame(root, settings, game.position, nextSeed, game.layouts);
 }
@@ -390,7 +430,7 @@ function showGame(
   let session: Player;
   let cpu: Cpu | null = null;
   if (cpuMode) {
-    const match = new Match(position, { undoOnPenalty: settings.undoOnPenalty });
+    const match = new Match(position, { undoOnPenalty: settings.undoOnPenalty, shapeRules: settings.shapeRules });
     session = new Player(match, { color: myColor, restricted: settings.restricted, handLimit: settings.handLimits[myColor] });
     // CPU は人の地（myColor の地）を整地する
     // CPU のミスや無駄な操作の乱数は、終局図のシードとは別に毎回ランダムに決める
@@ -399,7 +439,11 @@ function showGame(
       random: mulberry32(seedNumber(randomSeed())),
     });
   } else {
-    session = new Session(position, { undoOnPenalty: settings.undoOnPenalty, handLimit: settings.handLimit });
+    session = new Session(position, {
+      undoOnPenalty: settings.undoOnPenalty,
+      handLimit: settings.handLimit,
+      shapeRules: settings.shapeRules,
+    });
   }
   const cpuPlayer = cpu?.player ?? null;
   // 自分が白なら盤を 180° 回して表示する（仕様書 §4）
@@ -1119,12 +1163,14 @@ function showGame(
 
 /** 見出しと「?」。「?」にマウスを乗せるかフォーカスすると、右に説明の吹き出しを出す。 */
 function legendWithHelp(text: string, help: string): HTMLLegendElement {
-  return h("legend", {}, [
-    text,
-    h("span", { class: "help", tabindex: "0", role: "button", "aria-label": `${text}の説明` }, [
-      "?",
-      h("span", { class: "help-bubble", role: "tooltip" }, [help]),
-    ]),
+  return h("legend", {}, [text, helpIcon(text, help)]);
+}
+
+/** 「?」に重ねると説明の吹き出しを出す。 */
+function helpIcon(text: string, help: string): HTMLElement {
+  return h("span", { class: "help", tabindex: "0", role: "button", "aria-label": `${text}の説明` }, [
+    "?",
+    h("span", { class: "help-bubble", role: "tooltip" }, [help]),
   ]);
 }
 
@@ -1140,6 +1186,35 @@ function recordLabel(record: GameRecord): string {
 }
 
 /** 設定項目のラジオボタン群。 */
+/** 設定のまとまり（見出しと枠）。 */
+function settingGroup(title: string, rows: HTMLElement[]): HTMLElement {
+  return h("section", { class: "setting-group" }, [h("h2", {}, [title]), ...rows]);
+}
+
+/** 設定の 1 項目（名前と選択肢）。help があれば名前の横に「?」を出す。 */
+function setting(label: string, content: (Node | string)[], help?: string, className?: string): HTMLElement {
+  return h("div", { class: className ? `setting ${className}` : "setting", role: "group", "aria-label": label }, [
+    h("div", { class: "setting-label" }, help ? [label, helpIcon(label, help)] : [label]),
+    h("div", { class: "setting-options" }, content),
+  ]);
+}
+
+/** ラジオボタンの選択肢。 */
+function radios(name: string, options: { value: string; label: string; checked: boolean; disabled?: boolean }[]): HTMLElement[] {
+  return options.map((o) =>
+    h("label", {}, [
+      h("input", {
+        type: "radio",
+        name,
+        value: o.value,
+        ...(o.checked ? { checked: "" } : {}),
+        ...(o.disabled ? { disabled: "" } : {}),
+      }, []),
+      o.label,
+    ]),
+  );
+}
+
 /** 担当の地のすべてで、今の盤から整地の形が見つかるか（死に石取りの途中なら見つかるものとする）。 */
 function canPlanAll(player: Player): boolean {
   if (player.phase !== "arrange") return true;
@@ -1280,6 +1355,7 @@ function loadSettings(): Settings {
     undoOnPenalty: true,
     handLimit: DEFAULT_HAND_LIMIT,
     handLimits: { [BLACK]: DEFAULT_HAND_LIMIT, [WHITE]: DEFAULT_HAND_LIMIT },
+    shapeRules: DEFAULT_SHAPE_RULES,
     replay: false,
     seed: randomSeed(),
   };
@@ -1288,6 +1364,11 @@ function loadSettings(): Settings {
     const settings = { ...fallback, ...saved, seed: fallback.seed };
     if (!isCpuLevel(settings.cpuLevel)) settings.cpuLevel = fallback.cpuLevel;
     settings.handLimit = clampHandLimit(settings.handLimit);
+    const rules = saved.shapeRules ?? {};
+    settings.shapeRules = {
+      oneLineFrom: rules.oneLineFrom === 5 || rules.oneLineFrom === 10 ? rules.oneLineFrom : null,
+      allowFiveByOdd: rules.allowFiveByOdd === true,
+    };
     settings.handLimits = {
       [BLACK]: clampHandLimit(settings.handLimits?.[BLACK]),
       [WHITE]: clampHandLimit(settings.handLimits?.[WHITE]),

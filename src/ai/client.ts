@@ -1,4 +1,5 @@
 import { Board } from "../core/board";
+import { DEFAULT_SHAPE_RULES, type ShapeRules } from "../core/shapes";
 import type { GeneratedGame } from "./generate";
 import type { GameRecord } from "./sgf";
 import { MODEL_PATH, type SerializedGame, type WorkerRequest, type WorkerResponse } from "./protocol";
@@ -19,8 +20,8 @@ export class GameGenerator {
   private readonly taking = new Set<number>();
 
   /** 裏で 1 局生成しておく。ほかの先読みは中断する。 */
-  prefetch(size: number, seed: number, forCpu = false): void {
-    const key = `${size}:${seed}:${forCpu}`;
+  prefetch(size: number, seed: number, forCpu = false, rules: ShapeRules = DEFAULT_SHAPE_RULES): void {
+    const key = cacheKey(size, seed, forCpu, rules);
     for (const [other, entry] of this.prefetched) {
       if (other === key || this.taking.has(entry.id)) continue;
       this.worker?.postMessage({ type: "cancel", id: entry.id } satisfies WorkerRequest);
@@ -28,7 +29,7 @@ export class GameGenerator {
     }
     if (this.prefetched.has(key)) return;
     const id = this.nextId++;
-    const promise = this.request(id, size, seed, forCpu);
+    const promise = this.request(id, size, seed, forCpu, rules);
     promise.catch(() => {
       if (this.prefetched.get(key)?.id === id) this.prefetched.delete(key);
     });
@@ -36,9 +37,15 @@ export class GameGenerator {
   }
 
   /** 生成済み（または生成中）の 1 局を受け取る。 */
-  async take(size: number, seed: number, forCpu: boolean, onProgress?: (move: number) => void): Promise<GeneratedGame> {
-    const key = `${size}:${seed}:${forCpu}`;
-    this.prefetch(size, seed, forCpu);
+  async take(
+    size: number,
+    seed: number,
+    forCpu: boolean,
+    rules: ShapeRules,
+    onProgress?: (move: number) => void,
+  ): Promise<GeneratedGame> {
+    const key = cacheKey(size, seed, forCpu, rules);
+    this.prefetch(size, seed, forCpu, rules);
     const entry = this.prefetched.get(key)!;
     const listener = this.pending.get(entry.id);
     if (listener) listener.onProgress = onProgress;
@@ -52,20 +59,20 @@ export class GameGenerator {
   }
 
   /** 実戦の棋譜（SGF）から整地用の局面を作る。 */
-  fromRecord(record: GameRecord, forCpu = false): Promise<GeneratedGame> {
+  fromRecord(record: GameRecord, forCpu = false, rules: ShapeRules = DEFAULT_SHAPE_RULES): Promise<GeneratedGame> {
     const worker = this.ensureWorker();
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      worker.postMessage({ type: "record", id, record, forCpu, modelUrl: modelUrl() } satisfies WorkerRequest);
+      worker.postMessage({ type: "record", id, record, forCpu, rules, modelUrl: modelUrl() } satisfies WorkerRequest);
     });
   }
 
-  private request(id: number, size: number, seed: number, forCpu: boolean): Promise<GeneratedGame> {
+  private request(id: number, size: number, seed: number, forCpu: boolean, rules: ShapeRules): Promise<GeneratedGame> {
     const worker = this.ensureWorker();
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      worker.postMessage({ type: "generate", id, size, seed, forCpu, modelUrl: modelUrl() } satisfies WorkerRequest);
+      worker.postMessage({ type: "generate", id, size, seed, forCpu, rules, modelUrl: modelUrl() } satisfies WorkerRequest);
     });
   }
 
@@ -103,4 +110,9 @@ function deserialize(game: SerializedGame): GeneratedGame {
 /** ネットワークの絶対 URL。Worker からは相対パスが解決できないので、ページ側で作る。 */
 function modelUrl(): string {
   return new URL(`${import.meta.env.BASE_URL}${MODEL_PATH}`, document.baseURI).href;
+}
+
+/** 先読みの見分け: 盤のサイズ・シード・整地の形のルールが同じなら同じ局面になる。 */
+function cacheKey(size: number, seed: number, forCpu: boolean, rules: ShapeRules): string {
+  return `${size}:${seed}:${forCpu}:${rules.oneLineFrom ?? "-"}:${rules.allowFiveByOdd}`;
 }
