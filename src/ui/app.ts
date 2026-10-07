@@ -13,7 +13,8 @@ import { DEFAULT_HAND_LIMIT, Match, Player, byDistanceFrom } from "../game/match
 import { PENALTY_MS, Session } from "../game/session";
 import { BoardView } from "./boardView";
 import { TRAY_SLOTS, TrayView } from "./trayView";
-import { CpuResult, addCpuRecord, addSoloRecord, loadScores, soloRanking } from "./scores";
+import { CpuRecord, CpuResult, SoloRecord, addCpuRecord, addSoloRecord, loadScores, soloRanking } from "./scores";
+import { shareOnX } from "./share";
 
 interface Settings {
   /** ひとりで / vs CPU（仕様書 §3）。 */
@@ -451,6 +452,7 @@ function showGame(
     });
   }
   const cpuPlayer = cpu?.player ?? null;
+  if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__ssb = { session, cpu, layouts, position };
   // 自分が白なら盤を 180° 回して表示する（仕様書 §4）
   const view = new BoardView(settings.size, cpuMode && myColor === WHITE);
   const colorName = (c: Color) => (c === BLACK ? "黒" : "白");
@@ -1027,8 +1029,8 @@ function showGame(
   /** 記録に残す設定（このゲームのシード・棋譜を含む）。「再プレイ」で同じゲームを始めるのに使う。 */
   const replaySettings = (): Settings => ({ ...settings });
   /** vs CPU の戦績を残す。 */
-  const recordCpuGame = (result: CpuResult) => {
-    addCpuRecord<Settings>({
+  const recordCpuGame = (result: CpuResult): CpuRecord<Settings> => {
+    const record: CpuRecord<Settings> = {
       date: Date.now(),
       result,
       size: settings.size,
@@ -1036,7 +1038,9 @@ function showGame(
       cpuTime: cpuPlayer?.phase === "finished" ? cpuPlayer.elapsed() : null,
       penalties: session.penalties,
       settings: replaySettings(),
-    });
+    };
+    addCpuRecord<Settings>(record);
+    return record;
   };
   const scoreboardButton = () => {
     const button = h("button", {}, ["スコアボード"]);
@@ -1070,22 +1074,26 @@ function showGame(
       colorPicker.hidden = true;
     }
     const lines: Node[] = [];
+    let shareText: string;
     if (winner) {
       phaseLabel.textContent = winner === "me" ? "あなたの勝ち！" : "CPU の勝ち…";
       const mine = session.phase === "finished" ? formatTime(session.elapsed()) : "未完了";
       const theirs = cpuPlayer!.phase === "finished" ? formatTime(cpuPlayer!.elapsed()) : "未完了";
       lines.push(h("p", {}, [`あなた ${mine}・CPU ${theirs}`]));
-      recordCpuGame(winner === "me" ? "win" : "lose");
+      shareText = cpuShareText(recordCpuGame(winner === "me" ? "win" : "lose"));
     } else {
       phaseLabel.textContent = "整地完了！";
       const time = session.elapsed();
-      const rank = addSoloRecord<Settings>({
+      const record: SoloRecord<Settings> = {
         time,
         penalties: session.penalties,
         date: Date.now(),
         size: settings.size,
         settings: replaySettings(),
-      });
+      };
+      const rank = addSoloRecord<Settings>(record);
+      shareText = soloShareText(record, rank);
+      lines.push(h("p", {}, [`タイム ${formatTime(time)}${session.penalties > 0 ? `（ペナルティ ${session.penalties} 回込み）` : ""}`]));
       const best = soloRanking(loadScores<Settings>(), settings.size)[0];
       lines.push(
         h("p", {}, [
@@ -1097,12 +1105,16 @@ function showGame(
         ]),
       );
     }
+    const share = h("button", { type: "button", class: "share-x" }, ["X でシェア"]);
+    share.addEventListener("click", () => shareOnX(shareText));
     resultBox.replaceChildren(
       h("p", {}, [`黒 ${session.initialScores[BLACK]} 目・白 ${session.initialScores[WHITE]} 目`]),
       ...lines,
-      h("div", { class: "buttons" }, [again, back, scoreboardButton()]),
+      h("div", { class: "buttons" }, [again, back, scoreboardButton(), share]),
     );
     resultBox.hidden = false;
+    // 完了したら結果のダイアログを出し、X でシェアできるようにする
+    openResultDialog(root, phaseLabel.textContent ?? "", [...lines].map((n) => n.textContent ?? ""), shareText);
   };
 
   // --- CPU ---
@@ -1469,6 +1481,11 @@ function showScoreboard(root: HTMLElement, size: number, tab: "solo" | "cpu"): v
     });
     return button;
   };
+  const shareButton = (text: string) => {
+    const button = h("button", { type: "button", class: "share-x" }, ["シェア"]);
+    button.addEventListener("click", () => shareOnX(text));
+    return button;
+  };
   const source = (r: { settings: Settings }) =>
     r.settings.record ? `棋譜: ${recordLabel(r.settings.record)}` : `シード ${r.settings.seed}`;
   const rulesLabel = (r: { settings: Settings }) => {
@@ -1514,7 +1531,7 @@ function showScoreboard(root: HTMLElement, size: number, tab: "solo" | "cpu"): v
                 ]),
                 detail(r),
               ]),
-              replayButton(r.settings),
+              h("div", { class: "score-actions" }, [replayButton(r.settings), shareButton(soloShareText(r, k + 1))]),
             ]),
           )),
     );
@@ -1535,7 +1552,7 @@ function showScoreboard(root: HTMLElement, size: number, tab: "solo" | "cpu"): v
               ]),
               detail(r),
             ]),
-            replayButton(r.settings),
+            h("div", { class: "score-actions" }, [replayButton(r.settings), shareButton(cpuShareText(r))]),
           ]),
         ));
 
@@ -1552,6 +1569,48 @@ function showScoreboard(root: HTMLElement, size: number, tab: "solo" | "cpu"): v
     ]),
   );
   renderSolo();
+}
+
+/** シードの一言（同じ局面で遊べるように添える）。棋譜で遊んだときは付けない。 */
+function seedText(settings: Settings): string {
+  return settings.record ? "" : `（シード ${settings.seed}）`;
+}
+
+/** ひとりでモードの記録のシェア文。 */
+function soloShareText(r: SoloRecord<Settings>, rank: number | null): string {
+  const penalty = r.penalties > 0 ? `（ペナルティ ${r.penalties} 回込み）` : "（ノーミス）";
+  const place = rank === 1 ? `自己ベスト更新！` : rank !== null ? `自己ベスト ${rank} 位。` : "";
+  return `${r.size} 路の終局図を ${formatTime(r.time)} で整地しました${penalty}${place}${seedText(r.settings)}`;
+}
+
+/** vs CPU の戦績のシェア文。 */
+function cpuShareText(r: CpuRecord<Settings>): string {
+  const level = CPU_LEVELS[r.settings.cpuLevel]?.label ?? r.settings.cpuLevel;
+  const time = (ms: number | null) => (ms === null ? "未完了" : formatTime(ms));
+  const outcome = r.result === "win" ? "に勝ちました！" : r.result === "lose" ? "に負けました…" : "にギブアップしました…";
+  return `vs CPU（${level}・${r.size} 路）${outcome} あなた ${time(r.myTime)}・CPU ${time(r.cpuTime)}${seedText(r.settings)}`;
+}
+
+/** 完了したときの結果ダイアログ。X でシェアできる。 */
+function openResultDialog(root: HTMLElement, title: string, lines: string[], shareText: string): void {
+  const dialog = h("dialog", { class: "result-dialog" }, []);
+  const share = h("button", { type: "button", class: "share-x primary" }, ["X でシェア"]);
+  const close = h("button", { type: "button" }, ["閉じる"]);
+  share.addEventListener("click", () => shareOnX(shareText));
+  close.addEventListener("click", () => dialog.close());
+  dialog.addEventListener("close", () => dialog.remove());
+  // 枠の外をクリックしても閉じる
+  dialog.addEventListener("click", (e) => {
+    if (e.target === dialog) dialog.close();
+  });
+  dialog.append(
+    h("h2", {}, [title]),
+    ...lines.filter(Boolean).map((line) => h("p", {}, [line])),
+    h("p", { class: "share-preview" }, [shareText]),
+    h("div", { class: "buttons" }, [share, close]),
+  );
+  root.append(dialog);
+  dialog.showModal();
 }
 
 function formatDate(ms: number): string {

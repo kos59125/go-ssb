@@ -1148,3 +1148,67 @@ body.holding .tray {
   font-size: 13px;
   padding: 4px 10px;
 }
+
+/* X でシェア */
+button.share-x {
+  background: #0f1419;
+  border-color: #0f1419;
+  color: #fff;
+}
+
+.score-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.score-actions button {
+  font-size: 13px;
+  padding: 4px 10px;
+}
+
+/* 完了時の結果ダイアログ */
+.result-dialog {
+  width: min(420px, calc(100vw - 32px));
+  box-sizing: border-box;
+  padding: 22px 24px;
+  border: none;
+  border-radius: 14px;
+  background: var(--panel);
+  color: var(--fg);
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.35);
+  text-align: center;
+}
+
+.result-dialog::backdrop {
+  background: rgb(30 25 20 / 0.45);
+}
+
+.result-dialog h2 {
+  margin: 0 0 10px;
+  color: var(--accent);
+  font-size: 26px;
+}
+
+.result-dialog p {
+  margin: 6px 0;
+}
+
+.result-dialog .share-preview {
+  margin: 14px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 13px;
+  text-align: left;
+}
+
+.result-dialog .buttons {
+  justify-content: center;
+}
+
+.result-dialog .buttons button {
+  min-width: 8em;
+}
