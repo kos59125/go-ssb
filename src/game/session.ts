@@ -14,6 +14,8 @@ export interface HeldStone {
   color: Color;
   dead: boolean;
   source: Source;
+  /** 間違いの印が付いていた石か。 */
+  marked?: boolean;
 }
 
 export interface Hand {
@@ -23,6 +25,8 @@ export interface Hand {
   origins: number[];
   /** この手で石を置いた点。 */
   placed: number[];
+  /** そのうちアゲハマ（トレイから持った石）と、印の付いていた石を置いた点。 */
+  placedPrisoners: number[];
   /** 印の付いた石を持ったか。 */
   carriedMark: boolean;
   /** 石を持つ前の状態。ペナルティで元に戻すときに使う。 */
@@ -111,13 +115,15 @@ export class Session {
     if (stones.length === 0) return false;
     const hand = this.ensureHand();
     for (const i of stones) {
+      const marked = this.marks.delete(i);
       hand.stones.push({
         color: this.board.cells[i] as Color,
         dead: this.board.dead[i] === 1,
         source: { kind: "board", point: i },
+        marked,
       });
       hand.origins.push(i);
-      if (this.marks.delete(i)) hand.carriedMark = true;
+      if (marked) hand.carriedMark = true;
       const { x, y } = this.board.point(i);
       this.board.set(x, y, EMPTY);
     }
@@ -198,6 +204,8 @@ export class Session {
     const { x, y } = this.board.point(i);
     this.board.set(x, y, stone.color, stone.dead);
     hand.placed.push(i);
+    // アゲハマと、間違いの印が付いていた石は、相手の地に置いたらその場で判定する
+    if (stone.source.kind === "tray" || stone.marked) hand.placedPrisoners.push(i);
     if (hand.stones.length === 0) {
       this.hand = null;
       this.settle(hand);
@@ -255,7 +263,7 @@ export class Session {
   /**
    * 手が空になった時点でペナルティを判定する（仕様書 §2.5）。
    *
-   * - 相手の地に石を置いたなど明らかな誤りは、その場でペナルティ。
+   * - アゲハマを相手の地に置いた明らかな誤りは、その場でペナルティ。
    * - 境界が開いている間は判定を保留し、閉じた時点で目数を比べる。
    *   境界の石を動かしても、目数が変わらなければペナルティにしない。
    */
@@ -266,7 +274,7 @@ export class Session {
       return;
     }
 
-    if (this.placedInEnemyTerritory(hand.placed)) {
+    if (this.placedInEnemyTerritory(hand.placedPrisoners)) {
       if (hand.carriedMark) {
         // 間違えた石を別の誤った場所に動かしただけなら、印も一緒に動かす
         for (const i of hand.placed) this.marks.add(i);
@@ -328,15 +336,24 @@ export class Session {
   }
 
   /**
-   * 置いた石のどれかが相手の地の中にあるか。境界が開いている間も判定できるよう、
-   * 最後に境界が閉じていた時点の地で判定する。
+   * 置いたアゲハマのどれかが、その石と反対の色の地の中にあるか。
+   * 境界が開いている間も判定できるよう、最後に境界が閉じていた時点の地で判定する。
+   * 盤上の石の移動（境界線をずらすなど）はここでは判定せず、境界が閉じた時点で
+   * 黒白それぞれの地の総数だけを比べる。
    */
   private placedInEnemyTerritory(placed: number[]): boolean {
     return placed.some((i) => this.settledOwner[i] === opponent(this.board.cells[i] as Color));
   }
 
   private ensureHand(): Hand {
-    this.hand ??= { stones: [], origins: [], placed: [], carriedMark: false, before: this.snapshot() };
+    this.hand ??= {
+      stones: [],
+      origins: [],
+      placed: [],
+      placedPrisoners: [],
+      carriedMark: false,
+      before: this.snapshot(),
+    };
     return this.hand;
   }
 

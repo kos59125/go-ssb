@@ -222,6 +222,15 @@ describe("Session", () => {
       expect(s.board.get(5, 0)).toBe(0);
     });
 
+    it("盤上の石を相手の地に動かしても、境界が閉じるまではペナルティにしない", () => {
+      const s = start();
+      // 黒の壁 (2,0) を白地の (4,0) へ（境界線をずらす途中）
+      s.pickUp([s.board.index(2, 0)]);
+      s.placeAt(s.board.index(4, 0));
+      expect(s.penalties).toBe(0);
+      expect(s.boundaryOpen).toBe(true);
+    });
+
     it("境界が開いたままでは完了できない", () => {
       const s = start();
       s.pickUp([s.board.index(3, 3)]);
