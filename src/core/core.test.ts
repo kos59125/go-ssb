@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { Position, analyze, score } from "./analysis";
 import { BLACK, Board, Color, WHITE, parseBoard } from "./board";
 import { checkTerritory, isRemovalDone } from "./judge";
-import { placeStones } from "./placement";
 import { classifySection } from "./shapes";
 
 /** (x, y) を含む領域の形を判定する。 */
@@ -336,42 +335,5 @@ describe("isRemovalDone", () => {
     expect(isRemovalDone(b)).toBe(false);
     b.set(8, 2, 0);
     expect(isRemovalDone(b)).toBe(true);
-  });
-});
-
-describe("placeStones", () => {
-  it("クリックした点から近い順・上の行優先に、持った順で置く", () => {
-    const board = parseBoard(`
-      xxxxx
-      x...x
-      x...x
-      xxxxx
-    `);
-    const stones = [
-      { color: WHITE, dead: false },
-      { color: BLACK, dead: false },
-      { color: WHITE, dead: true },
-    ] as const;
-    const { placed, remaining } = placeStones(board, board.index(2, 2), [...stones]);
-    expect(placed).toEqual([board.index(2, 2), board.index(2, 1), board.index(1, 2)]);
-    expect(remaining).toEqual([]);
-    expect(board.get(2, 2)).toBe(WHITE);
-    expect(board.get(2, 1)).toBe(BLACK);
-    expect(board.isDead(1, 2)).toBe(true);
-  });
-
-  it("つながった空点が足りなければ残りを返す", () => {
-    const board = parseBoard(`
-      xxxxx
-      x.x.x
-      xxxxx
-    `);
-    const { placed, remaining } = placeStones(board, board.index(1, 1), [
-      { color: BLACK, dead: false },
-      { color: BLACK, dead: false },
-    ]);
-    expect(placed).toEqual([board.index(1, 1)]);
-    expect(remaining).toHaveLength(1);
-    expect(board.get(3, 1)).toBe(0);
   });
 });

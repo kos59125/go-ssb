@@ -1,11 +1,16 @@
 import { Position, analyze, score } from "../core/analysis";
 import { BLACK, Board, Color, EMPTY, WHITE, opponent } from "../core/board";
 import { checkTerritory, isRemovalDone } from "../core/judge";
-import { HeldStone, placeStones } from "../core/placement";
 
 export const PENALTY_MS = 5000;
 
 export type Phase = "removal" | "arrange" | "finished";
+
+/** プレイヤーが持っている石。 */
+export interface HeldStone {
+  color: Color;
+  dead: boolean;
+}
 
 export type Origin = { kind: "board"; points: number[] } | { kind: "tray"; owner: Color };
 
@@ -94,12 +99,12 @@ export class Session {
 
   /**
    * 盤上の石を持つ。points は持つ順番に並べる。
-   * 盤上から持っている最中（まだどこにも置いていない）なら、持っている石に追加する。
+   * 盤上から持っている最中なら、持っている石に追加する（持った順番の最後に並ぶ）。
    */
   pickUp(points: number[]): boolean {
     if (this.phase === "finished") return false;
     const hand = this.hand;
-    if (hand && (hand.origin.kind !== "board" || hand.placed.length > 0)) return false;
+    if (hand && hand.origin.kind !== "board") return false;
     const stones = points.filter((i) => this.board.cells[i] !== EMPTY);
     if (stones.length === 0) return false;
     const before = hand?.before ?? this.snapshot();
@@ -126,7 +131,7 @@ export class Session {
     if (this.phase !== "arrange" || this.position.trays[owner] === 0) return false;
     if (this.hand) {
       const { origin } = this.hand;
-      if (origin.kind !== "tray" || origin.owner !== owner || this.hand.placed.length > 0) return false;
+      if (origin.kind !== "tray" || origin.owner !== owner) return false;
     } else {
       this.hand = { stones: [], origin: { kind: "tray", owner }, placed: [], carriedMark: false, before: this.snapshot() };
     }
@@ -160,13 +165,15 @@ export class Session {
     return origin?.kind === "board" && origin.points.includes(i) && this.board.cells[i] === EMPTY;
   }
 
-  /** 持っている石を、クリックした空点の周囲に置く。 */
+  /** 持っている石のうち、最初に持った 1 個をクリックした空点に置く。残りは持ったまま。 */
   placeAt(i: number): boolean {
     const hand = this.hand;
     if (!hand || this.phase !== "arrange" || this.board.cells[i] !== EMPTY) return false;
-    const { placed, remaining } = placeStones(this.board, i, hand.stones);
-    if (placed.length === 0) return false;
-    hand.placed.push(...placed);
+    // 石は 1 個ずつ、持った順に置く
+    const [stone, ...remaining] = hand.stones;
+    const { x, y } = this.board.point(i);
+    this.board.set(x, y, stone.color, stone.dead);
+    hand.placed.push(i);
     hand.stones = remaining;
     if (remaining.length === 0) {
       this.hand = null;

@@ -100,6 +100,22 @@ describe("Session", () => {
     expect(s.penalties).toBe(0);
   });
 
+  it("複数持っているときは、クリックごとに持った順で 1 個ずつ置く", () => {
+    const { s } = session(true, { [BLACK]: 0, [WHITE]: 0 });
+    removeDead(s);
+    // 黒の壁 (4,0) (4,1) を持ち、1 個ずつ置き直す
+    const a = s.board.index(4, 0);
+    const b = s.board.index(4, 1);
+    s.pickUp([a, b]);
+    expect(s.placeAt(b)).toBe(true);
+    expect(s.hand?.stones).toHaveLength(1);
+    expect(s.board.get(4, 1)).toBe(BLACK);
+    expect(s.board.get(4, 0)).toBe(0);
+    expect(s.placeAt(a)).toBe(true);
+    expect(s.hand).toBeNull();
+    expect(s.penalties).toBe(0);
+  });
+
   it("トレイから持っている最中は盤上の石を追加できない", () => {
     const { s } = session(true, { [BLACK]: 1, [WHITE]: 0 });
     removeDead(s);
