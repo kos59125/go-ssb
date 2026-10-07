@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { BLACK, Board, WHITE } from "../core/board";
 import { mulberry32 } from "../core/random";
-import { Cpu, CpuLevel } from "./cpu";
+import { CPU_LEVELS, Cpu, CpuLevel } from "./cpu";
 import { planLayouts } from "./layout";
 import { Match, Player } from "./match";
 import { Session } from "./session";
@@ -142,5 +142,41 @@ describe("Cpu", () => {
     // 相手が範囲外の石を白石に替えると、inner は境界の石になる
     board.set(outside % 11, Math.floor(outside / 11), WHITE);
     expect(validPlan(BLACK)?.area.has(inner) ?? false).toBe(false);
+  });
+
+  it("どの強さでも、どちらのペナルティ設定でも、最後は完了する", () => {
+    for (const level of Object.keys(CPU_LEVELS) as CpuLevel[]) {
+      for (const undoOnPenalty of [true, false]) {
+        for (let seed = 1; seed <= 40; seed++) {
+          const { human, cpuPlayer, cpu, match } = setup(BLACK, level, seed, undoOnPenalty);
+          human.capture(1 * 11 + 1);
+          let steps = 0;
+          while (cpuPlayer.phase !== "finished" && steps < 1000) {
+            cpu.step();
+            steps++;
+          }
+          expect(cpuPlayer.phase, `${level} ${undoOnPenalty} seed ${seed}`).toBe("finished");
+          expect(match.scores()).toEqual(match.initialScores);
+        }
+      }
+    }
+  });
+
+  it("強い CPU は石をまとめて持ち、少ない操作で整地する", () => {
+    const run = (level: CpuLevel) => {
+      const { human, cpuPlayer, cpu } = setup(BLACK, level);
+      human.capture(1 * 11 + 1);
+      let steps = 0;
+      let maxHand = 0;
+      while (cpuPlayer.phase !== "finished" && steps < 200) {
+        cpu.step();
+        maxHand = Math.max(maxHand, cpuPlayer.hand?.stones.length ?? 0);
+        steps++;
+      }
+      return { steps, maxHand };
+    };
+    const expert = run("expert");
+    expect(expert.maxHand).toBeGreaterThan(1);
+    expect(expert.steps).toBeLessThan(run("easy").steps);
   });
 });

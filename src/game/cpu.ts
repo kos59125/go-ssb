@@ -26,15 +26,19 @@ export interface CpuProfile {
   mistake: number;
   /** 無駄な操作（意味のない石の移動、持ってすぐ戻す）の起こりやすさ（1 回の操作あたり）。 */
   waste: number;
+  /** 一度に持つ石の最大数（盤上は範囲選択、トレイは複数個）。 */
+  batch: number;
+  /** 直前に操作した点から近い順に石を動かすか（カーソルの移動が少ない）。 */
+  efficient: boolean;
 }
 
 /** CPU の強さ。仕様書 §3.1.1 */
 export const CPU_LEVELS = {
-  beginner: { label: "入門", interval: 3000, mistake: 0.1, waste: 0.25 },
-  easy: { label: "やさしい", interval: 2200, mistake: 0.05, waste: 0.15 },
-  normal: { label: "ふつう", interval: 1500, mistake: 0.02, waste: 0.08 },
-  hard: { label: "つよい", interval: 1000, mistake: 0.005, waste: 0.03 },
-  expert: { label: "達人", interval: 600, mistake: 0, waste: 0 },
+  beginner: { label: "入門", interval: 3000, mistake: 0.1, waste: 0.25, batch: 1, efficient: false },
+  easy: { label: "やさしい", interval: 2200, mistake: 0.05, waste: 0.15, batch: 1, efficient: false },
+  normal: { label: "ふつう", interval: 1500, mistake: 0.02, waste: 0.08, batch: 2, efficient: true },
+  hard: { label: "つよい", interval: 1000, mistake: 0.005, waste: 0.03, batch: 4, efficient: true },
+  expert: { label: "達人", interval: 600, mistake: 0, waste: 0, batch: 6, efficient: true },
 } as const satisfies Record<string, CpuProfile>;
 export type CpuLevel = keyof typeof CPU_LEVELS;
 
@@ -68,8 +72,10 @@ export class Cpu {
   private wander: "move" | "return" | null = null;
   /** トレイから持った石を、間違えて反対の色の地に置く。 */
   private misplace = false;
-  /** 間違えて置いて印が付いたまま残った石（そのままにする設定のとき、自分で直す）。 */
-  private readonly mistakes = new Set<number>();
+  /** 自分が石を置いた点。印が付いたら（そのままにする設定のとき）自分で直す。 */
+  private readonly placed = new Set<number>();
+  /** 直前に操作した点（効率よく動かすときの基準）。 */
+  private cursor: number | null = null;
 
   /**
    * @param layouts 担当する地の色ごとの整地の形。ひとりでモードのおまかせ（ギブアップ）では
@@ -77,7 +83,9 @@ export class Cpu {
    */
   constructor(player: Player, layouts: Partial<Record<Color, SerializedLayout | null>>, options: CpuOptions = {}) {
     this.player = player;
-    this.profile = options.level ? CPU_LEVELS[options.level] : { label: "", interval: 0, mistake: 0, waste: 0 };
+    this.profile = options.level
+      ? CPU_LEVELS[options.level]
+      : { label: "", interval: 0, mistake: 0, waste: 0, batch: 1, efficient: false };
     this.random = options.random ?? Math.random;
     for (const color of player.assigned) {
       const layout = layouts[color];
@@ -133,15 +141,12 @@ export class Cpu {
     return { kind: "pick", point };
   }
 
-  /** 間違えて置いて残った石（印付き）を持ち上げる。置き場所は placeHeld で決める。 */
+  /** 自分が置いて印が付いた石を持ち上げる。置き場所は placeHeld で決める。 */
   private fixMistake(): CpuAction | null {
     const p = this.player;
-    for (const i of [...this.mistakes]) {
-      if (!p.marks.has(i) || p.board.cells[i] === EMPTY) {
-        this.mistakes.delete(i);
-        continue;
-      }
-      this.mistakes.delete(i);
+    for (const i of p.marks) {
+      if (!this.placed.has(i) || p.board.cells[i] === EMPTY) continue;
+      this.placed.delete(i);
       if (p.pickUp([i])) return { kind: "pick", point: i };
     }
     return null;
@@ -168,10 +173,23 @@ export class Cpu {
         if (p.capture(point)) return { kind: "capture", point };
       }
     }
+    const targets: number[] = [];
     for (let i = 0; i < p.board.cells.length; i++) {
       if (p.board.dead[i] !== 1) continue;
       if (p.color !== null && (p.board.cells[i] === p.color || regions[regionOf[i]].owner !== p.color)) continue;
-      if (p.capture(i)) return { kind: "capture", point: i };
+      targets.push(i);
+    }
+    // 効率よく動かすときは、直前に取った点から近い順に取る
+    if (this.profile.efficient && this.cursor !== null) {
+      const from = this.cursor;
+      const size = p.board.size;
+      targets.sort((a, b) => distance(a, from, size) - distance(b, from, size));
+    }
+    for (const i of targets) {
+      if (p.capture(i)) {
+        this.cursor = i;
+        return { kind: "capture", point: i };
+      }
     }
     p.updatePhase();
     return { kind: "idle" };
@@ -195,11 +213,13 @@ export class Cpu {
         return { kind: "complete" };
       }
       if (sinks.length > 0) {
-        const sink = sinks[0];
         if (sources.length > 0) {
-          const source = nearest(sources, sink, board.size);
-          if (p.pickUp([source])) return { kind: "pick", point: source };
-        } else if (p.pickFromTray(opponent(color), 1)) {
+          const picked = this.grabSources(sources, sinks);
+          if (p.pickUp(picked)) {
+            this.cursor = picked[0];
+            return { kind: "pick", point: picked[0] };
+          }
+        } else if (p.pickFromTray(opponent(color), Math.min(this.profile.batch, sinks.length))) {
           // color の石は、相手（opponent(color)）のトレイにある
           if (this.chance(this.profile.mistake)) this.misplace = true;
           return { kind: "pick-tray" };
@@ -258,7 +278,8 @@ export class Cpu {
         if (p.placeAt(point, color)) return { kind: "place", point };
       }
     }
-    if (this.misplace) {
+    // 判定は手が空になった時点なので、間違えるのは最後の 1 個にする
+    if (this.misplace && p.hand!.stones.length === 1) {
       this.misplace = false;
       // 整地ミス: アゲハマを反対の色の地（担当でない方の地）に置いてしまう（ペナルティ）
       const enemy = opponent(color);
@@ -269,14 +290,21 @@ export class Cpu {
       if (targets.length > 0) {
         const point = this.pickRandom(targets);
         if (p.placeAt(point, color)) {
-          if (p.board.cells[point] === color && p.marks.has(point)) this.mistakes.add(point);
+          this.placed.add(point);
           return { kind: "place", point };
         }
       }
     }
     const plan = this.validPlan(color);
     const sinks = plan ? this.diff(plan).sinks : [];
-    if (sinks.length > 0 && p.placeAt(sinks[0], color)) return { kind: "place", point: sinks[0] };
+    if (sinks.length > 0) {
+      const sink = this.profile.efficient && this.cursor !== null ? nearest(sinks, this.cursor, p.board.size) : sinks[0];
+      if (p.placeAt(sink, color)) {
+        this.placed.add(sink);
+        this.cursor = sink;
+        return { kind: "place", point: sink };
+      }
+    }
     if (stone.source.kind === "board" && p.board.cells[stone.source.point] === EMPTY && !stone.marked) {
       p.cancel();
       return { kind: "place", point: stone.source.point };
@@ -310,6 +338,48 @@ export class Cpu {
     return layout;
   }
 
+  /**
+   * 持ち上げる石（取る点）を選ぶ。1 個ずつなら最初の埋める点に近い石。複数持てるときは、
+   * 取る点だけを含む（ほかの石を含まない）矩形を範囲選択したように、まとめて持つ。
+   */
+  private grabSources(sources: number[], sinks: number[]): number[] {
+    const board = this.player.board;
+    const n = board.size;
+    const anchor = this.profile.efficient && this.cursor !== null ? this.cursor : sinks[0];
+    const seed = nearest(sources, anchor, n);
+    const limit = Math.min(this.profile.batch, sinks.length);
+    if (limit <= 1) return [seed];
+    const isSource = new Set(sources);
+    const sx = seed % n;
+    const sy = Math.floor(seed / n);
+    let best = [seed];
+    const reach = 3;
+    for (let x1 = Math.max(0, sx - reach); x1 <= sx; x1++) {
+      for (let x2 = sx; x2 <= Math.min(n - 1, sx + reach); x2++) {
+        for (let y1 = Math.max(0, sy - reach); y1 <= sy; y1++) {
+          for (let y2 = sy; y2 <= Math.min(n - 1, sy + reach); y2++) {
+            const picked: number[] = [];
+            let ok = true;
+            for (let y = y1; y <= y2 && ok; y++) {
+              for (let x = x1; x <= x2; x++) {
+                const i = y * n + x;
+                if (board.cells[i] === EMPTY) continue;
+                if (!isSource.has(i)) {
+                  ok = false;
+                  break;
+                }
+                picked.push(i);
+              }
+            }
+            if (ok && picked.length <= limit && picked.length > best.length) best = picked;
+          }
+        }
+      }
+    }
+    // カーソルの位置（範囲選択の始点）は seed にする
+    return [seed, ...best.filter((i) => i !== seed)];
+  }
+
   /** 計画と比べて、石を置く点（sinks）と石を取る点（sources）。 */
   private diff(plan: Layout): { sinks: number[]; sources: number[] } {
     const board = this.player.board;
@@ -324,7 +394,10 @@ export class Cpu {
   }
 }
 
+function distance(a: number, b: number, size: number): number {
+  return Math.abs((a % size) - (b % size)) + Math.abs(Math.floor(a / size) - Math.floor(b / size));
+}
+
 function nearest(points: number[], to: number, size: number): number {
-  const dist = (a: number) => Math.abs((a % size) - (to % size)) + Math.abs(Math.floor(a / size) - Math.floor(to / size));
-  return points.reduce((best, q) => (dist(q) < dist(best) ? q : best));
+  return points.reduce((best, q) => (distance(q, to, size) < distance(best, to, size) ? q : best));
 }

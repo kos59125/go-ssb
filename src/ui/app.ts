@@ -1111,11 +1111,11 @@ function formatTime(ms: number): string {
 }
 
 const MISTAKE_TEXT: Record<CpuLevel, string> = {
-  beginner: "整地ミスや無駄な操作が多い",
-  easy: "ときどき整地ミスや無駄な操作をする",
-  normal: "たまに整地ミスや無駄な操作をする",
-  hard: "ミスや無駄な操作はまれ",
-  expert: "ミスや無駄な操作をしない",
+  beginner: "石は 1 個ずつ、整地ミスや無駄な操作が多い",
+  easy: "石は 1 個ずつ、ときどき整地ミスや無駄な操作をする",
+  normal: "石を 2 個まで持つ、たまに整地ミスや無駄な操作をする",
+  hard: "石を 4 個まで持つ、ミスや無駄な操作はまれ",
+  expert: "石を 6 個まで持つ、ミスや無駄な操作をしない",
 };
 
 function loadSettings(): Settings {
