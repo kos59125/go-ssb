@@ -1,10 +1,12 @@
 import type { GeneratedGame } from "./generate";
+import type { GameRecord } from "./sgf";
 
 /** ページから見たネットワークのパス。Worker からは相対パスが解決できないので、絶対 URL にして渡す。 */
 export const MODEL_PATH = "models/kata1-b6c96-s175395328-d26788732.onnx";
 
 export type WorkerRequest =
   | { type: "generate"; id: number; size: number; seed: number; modelUrl: string }
+  | { type: "record"; id: number; record: GameRecord; modelUrl: string }
   | { type: "cancel"; id: number };
 
 export type WorkerResponse =

@@ -1,6 +1,7 @@
 import { GameGenerator } from "../ai/client";
 import { GeneratedGame } from "../ai/generate";
 import { GoGame } from "../ai/go";
+import { GameRecord, parseSgf } from "../ai/sgf";
 import { Position } from "../core/analysis";
 import { BLACK, Board, Color, EMPTY, WHITE, opponent } from "../core/board";
 import { randomSeed, seedNumber } from "../core/random";
@@ -16,6 +17,8 @@ interface Settings {
   replay: boolean;
   /** 終局図を作るシード。保存せず、画面を開くたびにランダムに決める。 */
   seed: string;
+  /** 読み込んだ実戦の棋譜（SGF）。あればシードの代わりにこれを使う。保存しない。 */
+  record?: GameRecord;
 }
 
 /** 棋譜の再生にかける時間。 */
@@ -45,6 +48,15 @@ function showSettings(root: HTMLElement, settings: Settings): void {
     h("main", { class: "settings" }, [
       h("h1", {}, ["囲碁スピード整地バトル"]),
       h("p", { class: "lead" }, ["ひとりで：黒地と白地を両方整地して、タイムを競います。"]),
+      radioGroup("終局図", "source", [
+        { value: "katago", label: "KataGo で作る", checked: !settings.record },
+        { value: "sgf", label: "SGF を読み込む", checked: !!settings.record },
+      ]),
+      h("fieldset", { class: "radio-group sgf-group" }, [
+        h("legend", {}, ["SGF ファイル（終局済みの棋譜）"]),
+        h("input", { type: "file", id: "sgf-file", accept: ".sgf,application/x-go-sgf" }, []),
+        h("p", { class: "note", id: "sgf-info" }, [settings.record ? recordLabel(settings.record) : "ファイルを選んでください。"]),
+      ]),
       radioGroup("盤のサイズ", "size", [
         { value: "19", label: "19 路", checked: settings.size === 19, disabled: small },
         { value: "13", label: "13 路", checked: settings.size === 13 },
@@ -72,6 +84,37 @@ function showSettings(root: HTMLElement, settings: Settings): void {
   );
   const selected = (name: string) => root.querySelector<HTMLInputElement>(`input[name="${name}"]:checked`)!.value;
   const seedInput = root.querySelector<HTMLInputElement>("#seed")!;
+  const sgfInfo = root.querySelector<HTMLParagraphElement>("#sgf-info")!;
+  const startButton = root.querySelector<HTMLButtonElement>("#start-button")!;
+  let record = settings.record;
+  // SGF のときは、盤のサイズとシードは棋譜で決まるので選べない
+  const updateSource = () => {
+    const sgf = selected("source") === "sgf";
+    root.querySelector<HTMLElement>(".sgf-group")!.hidden = !sgf;
+    root.querySelector<HTMLFieldSetElement>(".seed-group")!.disabled = sgf;
+    for (const input of root.querySelectorAll<HTMLInputElement>('input[name="size"]')) {
+      input.disabled = sgf || (small && input.value === "19");
+    }
+    startButton.disabled = sgf && !record;
+  };
+  for (const input of root.querySelectorAll<HTMLInputElement>('input[name="source"]')) {
+    input.addEventListener("change", updateSource);
+  }
+  root.querySelector<HTMLInputElement>("#sgf-file")!.addEventListener("change", async (e) => {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    try {
+      record = parseSgf(await file.text());
+      sgfInfo.textContent = recordLabel(record);
+      sgfInfo.classList.remove("error");
+    } catch (err) {
+      record = undefined;
+      sgfInfo.textContent = `読み込めませんでした: ${err instanceof Error ? err.message : err}`;
+      sgfInfo.classList.add("error");
+    }
+    updateSource();
+  });
+  updateSource();
   // 設定を選んでいる間に、裏で終局図を作っておく
   const prefetch = () => {
     if (!dummySeed() && seedInput.value.trim()) generator.prefetch(Number(selected("size")), seedNumber(seedInput.value));
@@ -89,8 +132,9 @@ function showSettings(root: HTMLElement, settings: Settings): void {
     seedInput.value = randomSeed();
     prefetch();
   });
-  root.querySelector("#start-button")!.addEventListener("click", () => {
+  startButton.addEventListener("click", () => {
     window.clearTimeout(seedTimer);
+    const sgf = selected("source") === "sgf" ? record : undefined;
     const next: Settings = {
       size: Number(selected("size")),
       undoOnPenalty: selected("undo") === "undo",
@@ -98,7 +142,7 @@ function showSettings(root: HTMLElement, settings: Settings): void {
       seed: seedInput.value.trim() || randomSeed(),
     };
     saveSettings(next);
-    void prepareGame(root, next);
+    void prepareGame(root, sgf ? { ...next, size: sgf.size, record: sgf } : next);
   });
 }
 
@@ -113,18 +157,24 @@ async function prepareGame(root: HTMLElement, settings: Settings): Promise<void>
     return;
   }
 
-  const status = h("p", { class: "lead" }, ["ネットワークを読み込んでいます…"]);
+  const status = h("p", { class: "lead" }, [
+    settings.record ? "棋譜を読み込んで、死に石を判定しています…" : "ネットワークを読み込んでいます…",
+  ]);
   const back = h("button", {}, ["やめる"]);
   let cancelled = false;
   back.addEventListener("click", () => {
     cancelled = true;
     showSettings(root, { ...settings, seed: randomSeed() });
   });
-  root.replaceChildren(h("main", { class: "settings" }, [h("h1", {}, ["終局図を生成中"]), status, back]));
+  root.replaceChildren(
+    h("main", { class: "settings" }, [h("h1", {}, [settings.record ? "棋譜を準備中" : "終局図を生成中"]), status, back]),
+  );
 
   let game: GeneratedGame;
   try {
-    game = await generator.take(settings.size, seed, (move) => (status.textContent = `自動対局中… ${move} 手目`));
+    game = settings.record
+      ? await generator.fromRecord(settings.record)
+      : await generator.take(settings.size, seed, (move) => (status.textContent = `自動対局中… ${move} 手目`));
   } catch (err) {
     if (cancelled) return;
     status.textContent = `終局図を生成できませんでした（${err instanceof Error ? err.message : err}）。`;
@@ -153,6 +203,7 @@ function replayGame(root: HTMLElement, game: GeneratedGame): Promise<void> {
     ]),
   );
   const go = new GoGame(game.size);
+  for (const { point, color } of game.setup) go.cells[point] = color;
   const show = () => {
     view.render(new Board(game.size, go.cells.slice()), new Set(), []);
     for (const color of [BLACK, WHITE] as const) {
@@ -167,6 +218,7 @@ function replayGame(root: HTMLElement, game: GeneratedGame): Promise<void> {
     const timer = window.setInterval(() => {
       if (k < game.moves.length) {
         const move = game.moves[k++];
+        go.toPlay = move.color;
         go.play(move.point);
         label.textContent = `棋譜を再生中… ${k} / ${game.moves.length} 手`;
         show();
@@ -212,6 +264,8 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
   const ghost = h("div", { class: "ghost" }, []);
   const trays = { [BLACK]: trayElement(BLACK), [WHITE]: trayElement(WHITE) };
   const quitButton = h("button", { type: "button" }, ["やめる"]);
+  // ひとりでモード: 終局図からやり直す（タイマーとペナルティは続く）
+  const resetButton = h("button", { type: "button" }, ["最初からやり直す"]);
   // 目数の入力欄は最初から出しておく（仕様書 §2.6）
   const blackInput = h("input", { type: "number", step: "1", required: "", inputmode: "numeric" }, []);
   const whiteInput = h("input", { type: "number", step: "1", required: "", inputmode: "numeric" }, []);
@@ -221,7 +275,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
       h("label", {}, ["白地", whiteInput, "目"]),
     ]),
     h("p", { class: "note" }, ["アゲハマが地より多いときはマイナスで入力します。"]),
-    h("div", { class: "buttons" }, [h("button", { class: "primary" }, ["完了"]), quitButton]),
+    h("div", { class: "buttons" }, [h("button", { class: "primary" }, ["完了"]), resetButton, quitButton]),
   ]);
   for (const input of [blackInput, whiteInput]) {
     input.addEventListener("input", () => input.classList.remove("wrong"));
@@ -255,7 +309,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
         message,
         scoreForm,
         resultBox,
-        h("p", { class: "note seed-note" }, [`シード: ${settings.seed}`]),
+        h("p", { class: "note seed-note" }, [settings.record ? `棋譜: ${recordLabel(settings.record)}` : `シード: ${settings.seed}`]),
       ]),
     ]),
     ghost,
@@ -503,6 +557,16 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
     window.clearTimeout(toastTimer);
   };
 
+  resetButton.addEventListener("click", () => {
+    if (!session.started) return;
+    if (!window.confirm("終局図からやり直しますか？（タイマーとペナルティはそのまま続きます）")) return;
+    session.reset();
+    errorMarks = new Set();
+    drag = null;
+    view.showSelection(null, null);
+    render();
+  });
+
   quitButton.addEventListener("click", () => {
     cleanup();
     showSettings(root, { ...settings, seed: nextSeed });
@@ -547,6 +611,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
     if (isBest) saveBest(settings.size, time);
     const again = h("button", { class: "primary" }, ["もう一度"]);
     const back = h("button", {}, ["設定に戻る"]);
+    // 棋譜で遊んだときの「もう一度」は同じ棋譜で、KataGo のときは新しいシードで遊ぶ
     again.addEventListener("click", () => void prepareGame(root, { ...settings, seed: nextSeed }));
     back.addEventListener("click", () => showSettings(root, { ...settings, seed: nextSeed }));
     for (const input of [blackInput, whiteInput]) input.disabled = true;
@@ -585,6 +650,12 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
     window.setTimeout(() => countdown.remove(), 700);
   }, 1000);
   cleanups.push(() => window.clearInterval(countdownTimer));
+}
+
+/** 棋譜の説明（対局者・盤サイズ・手数）。結果は答えになるので出さない。 */
+function recordLabel(record: GameRecord): string {
+  const players = record.black || record.white ? `${record.black ?? "?"}（黒）− ${record.white ?? "?"}（白）` : "対局者不明";
+  return `${players}、${record.size} 路、${record.moves.length} 手`;
 }
 
 /** 設定項目のラジオボタン群。 */

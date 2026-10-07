@@ -1,5 +1,6 @@
 import { Board } from "../core/board";
 import type { GeneratedGame } from "./generate";
+import type { GameRecord } from "./sgf";
 import { MODEL_PATH, type SerializedGame, type WorkerRequest, type WorkerResponse } from "./protocol";
 
 /**
@@ -50,12 +51,21 @@ export class GameGenerator {
     }
   }
 
+  /** 実戦の棋譜（SGF）から整地用の局面を作る。 */
+  fromRecord(record: GameRecord): Promise<GeneratedGame> {
+    const worker = this.ensureWorker();
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      worker.postMessage({ type: "record", id, record, modelUrl: modelUrl() } satisfies WorkerRequest);
+    });
+  }
+
   private request(id: number, size: number, seed: number): Promise<GeneratedGame> {
     const worker = this.ensureWorker();
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      const modelUrl = new URL(`${import.meta.env.BASE_URL}${MODEL_PATH}`, document.baseURI).href;
-      worker.postMessage({ type: "generate", id, size, seed, modelUrl } satisfies WorkerRequest);
+      worker.postMessage({ type: "generate", id, size, seed, modelUrl: modelUrl() } satisfies WorkerRequest);
     });
   }
 
@@ -88,4 +98,9 @@ export class GameGenerator {
 function deserialize(game: SerializedGame): GeneratedGame {
   const { cells, dead, trays, ...rest } = game;
   return { ...rest, position: { board: new Board(game.size, cells, dead), trays } };
+}
+
+/** ネットワークの絶対 URL。Worker からは相対パスが解決できないので、ページ側で作る。 */
+function modelUrl(): string {
+  return new URL(`${import.meta.env.BASE_URL}${MODEL_PATH}`, document.baseURI).href;
 }

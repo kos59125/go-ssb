@@ -83,6 +83,8 @@ export class Session {
   private pending = { placed: [] as number[], origins: [] as number[], carriedMark: false };
   /** 各トレイに入れられる石の上限（アゲハマの総数）。生きた石をアゲハマにはできない。 */
   readonly trayCapacity: Record<Color, number> = { [BLACK]: 0, [WHITE]: 0 };
+  /** 終局図（やり直し用）。 */
+  private readonly initial: Position;
   /** 開始の合図（begin）の時刻。合図の前は null。 */
   startedAt: number | null = null;
   finishedAt: number | null = null;
@@ -91,6 +93,7 @@ export class Session {
 
   constructor(position: Position, options: SessionOptions) {
     this.position = { board: position.board.clone(), trays: { ...position.trays } };
+    this.initial = { board: position.board.clone(), trays: { ...position.trays } };
     this.options = options;
     this.initialScores = this.scores();
     this.baseOpen = openPoints(this.board);
@@ -102,6 +105,25 @@ export class Session {
     for (const owner of [BLACK, WHITE] as const) {
       this.trayCapacity[owner] = this.position.trays[owner] + countDead(this.board, opponent(owner));
     }
+    this.markSettled();
+    this.updatePhase();
+  }
+
+  /**
+   * 終局図からやり直す（ひとりでモード）。盤・アゲハマ・フェーズ・印を最初の状態に戻す。
+   * タイマーとペナルティはそのまま続ける。
+   */
+  reset(): void {
+    if (this.phase === "finished") return;
+    this.hand = null;
+    this.board.cells.set(this.initial.board.cells);
+    this.board.dead.set(this.initial.board.dead);
+    this.position.trays[BLACK] = this.initial.trays[BLACK];
+    this.position.trays[WHITE] = this.initial.trays[WHITE];
+    this.marks.clear();
+    this.rejected = [];
+    this.pending = { placed: [], origins: [], carriedMark: false };
+    this.phase = "removal";
     this.markSettled();
     this.updatePhase();
   }

@@ -251,6 +251,7 @@ button.primary {
 
 .buttons {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -552,4 +553,17 @@ button.primary {
   background: #fde8e6;
   outline: none;
   animation: shake 0.45s ease-in-out;
+}
+
+.sgf-group {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.sgf-group .note.error {
+  color: var(--accent);
+}
+
+.radio-group:disabled {
+  opacity: 0.55;
 }

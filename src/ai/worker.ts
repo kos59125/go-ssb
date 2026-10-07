@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 import * as ort from "onnxruntime-web/wasm";
 import { mulberry32 } from "../core/random";
-import { GenerationCancelled, KOMI, generateGame } from "./generate";
+import { GenerationCancelled, KOMI, finishRecord, generateGame } from "./generate";
 import type { WorkerRequest, WorkerResponse } from "./protocol";
 import { Evaluator, createEvaluator } from "./model";
 
@@ -24,8 +24,23 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
     cancelled.add(request.id);
     return;
   }
-  queue = queue.then(() => handle(request));
+  queue = queue.then(() => (request.type === "record" ? handleRecord(request) : handle(request)));
 };
+
+/** 実戦の棋譜から整地用の局面を作る。 */
+async function handleRecord({ id, record, modelUrl }: Extract<WorkerRequest, { type: "record" }>): Promise<void> {
+  try {
+    const evaluate = await getEvaluator(modelUrl);
+    const { position, ...rest } = await finishRecord(evaluate, record);
+    self.postMessage({
+      type: "done",
+      id,
+      game: { ...rest, cells: position.board.cells, dead: position.board.dead, trays: position.trays },
+    } satisfies WorkerResponse);
+  } catch (err) {
+    self.postMessage({ type: "error", id, message: err instanceof Error ? err.message : String(err) } satisfies WorkerResponse);
+  }
+}
 
 async function handle({ id, size, seed, modelUrl }: Extract<WorkerRequest, { type: "generate" }>): Promise<void> {
   const post = (msg: WorkerResponse) => self.postMessage(msg);

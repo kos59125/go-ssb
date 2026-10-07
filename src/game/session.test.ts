@@ -41,6 +41,23 @@ describe("Session", () => {
     expect(s.position.trays).toEqual({ [BLACK]: 1, [WHITE]: 1 });
   });
 
+  it("終局図からやり直すと盤とアゲハマが戻り、タイマーとペナルティは続く", () => {
+    const { s, tick } = session(true, { [BLACK]: 1, [WHITE]: 0 });
+    removeDead(s);
+    s.pickFromTray(BLACK);
+    s.placeAt(s.board.index(0, 0)); // 誤り → ペナルティ
+    tick(3000);
+    s.pickUp([s.board.index(4, 0)]);
+    s.reset();
+    expect(s.hand).toBeNull();
+    expect(s.phase).toBe("removal");
+    expect(s.board.isDead(2, 1)).toBe(true);
+    expect(s.board.get(4, 0)).toBe(BLACK);
+    expect(s.position.trays).toEqual({ [BLACK]: 1, [WHITE]: 0 });
+    expect(s.penalties).toBe(1);
+    expect(s.elapsed()).toBe(3000 + 5000);
+  });
+
   it("合図の前はタイムが進まない", () => {
     let t = 0;
     const s = new Session({ board: parseBoard(BOARD), trays: { [BLACK]: 0, [WHITE]: 0 } }, { undoOnPenalty: true, now: () => t });

@@ -2,6 +2,7 @@ import { Position, analyze } from "../core/analysis";
 import { BLACK, Board, Color, EMPTY, WHITE, opponent } from "../core/board";
 import { Evaluation, Evaluator } from "./model";
 import { GoGame, Move, PASS } from "./go";
+import type { GameRecord } from "./sgf";
 
 export const KOMI = 6.5;
 
@@ -15,6 +16,8 @@ export interface GeneratedGame {
   position: Position;
   /** ダメとして自動で埋めた点と色。棋譜の再生後に置く。 */
   dameFills: Move[];
+  /** 置き石などの初期配置（SGF の AB / AW）。 */
+  setup: Move[];
   /** 日本ルールでの結果（例: "B+3.5"）。 */
   result: string;
 }
@@ -39,6 +42,22 @@ export class GenerationCancelled extends Error {
 }
 
 /**
+ * 実戦の終局済みの棋譜（SGF）から整地用の局面を作る。死に石は KataGo の所有権で判定し、
+ * 残ったダメは埋める。作り直しはできないので、判定に引っかかってもそのまま使う。
+ */
+export async function finishRecord(evaluate: Evaluator, record: GameRecord): Promise<GeneratedGame> {
+  const game = new GoGame(record.size);
+  for (const { point, color } of record.setup) if (point !== PASS) game.cells[point] = color;
+  for (const [k, move] of record.moves.entries()) {
+    game.toPlay = move.color;
+    if (!game.isLegal(move.point)) throw new Error(`${k + 1} 手目が打てない手です`);
+    game.play(move.point);
+  }
+  const finished = await finish(evaluate, game, { random: Math.random, record });
+  return { ...finished!, result: record.result ?? finished!.result };
+}
+
+/**
  * KataGo の方策ネットワークで自動対局し、整地用の終局図を作る（仕様書 §5）。
  * 条件を満たさない対局は作り直す。
  */
@@ -46,7 +65,7 @@ export async function generateGame(evaluate: Evaluator, options: GenerateOptions
   for (let attempt = 0; attempt < 10; attempt++) {
     const game = await selfPlay(evaluate, options);
     if (!game) continue;
-    const finished = await finish(evaluate, game, options.random ?? Math.random, options.onReject);
+    const finished = await finish(evaluate, game, { random: options.random ?? Math.random, reject: options.onReject });
     if (finished) return finished;
   }
   throw new Error("終局図を生成できませんでした");
@@ -203,12 +222,20 @@ function sample(
  * 終局後の処理: 死に石の判定、ダメ埋め、盤の向きの調整。
  * 判定が曖昧な対局は null を返して作り直す。
  */
-async function finish(
-  evaluate: Evaluator,
-  game: GoGame,
-  random: () => number,
-  reject: (reason: string) => void = () => {},
-): Promise<GeneratedGame | null> {
+interface FinishOptions {
+  random: () => number;
+  reject?: (reason: string) => void;
+  /** 実戦の棋譜（SGF）用: 作り直しの判定をせず、盤の向きも変えない。 */
+  record?: { setup: Move[]; komi: number };
+}
+
+async function finish(evaluate: Evaluator, game: GoGame, options: FinishOptions): Promise<GeneratedGame | null> {
+  const { random, record } = options;
+  // 実戦の棋譜は作り直せないので、判定に引っかかっても使う
+  const reject = (reason: string) => {
+    options.reject?.(reason);
+    return record === undefined;
+  };
   const size = game.size;
   const area = size * size;
   const ev = await evaluate(game);
@@ -230,8 +257,9 @@ async function finish(
   }
 
   const board = new Board(size, game.cells.slice(), dead);
-  const dameFills = fillDame(game, board, own);
-  if (!dameFills) return reject("dame"), null;
+  const { fills: dameFills, unresolved } = fillDame(game, board, own);
+  // 埋めきれなかった中立の空点がセキにしては多い
+  if (unresolved > 4 && reject("dame")) return null;
 
   // 地の判定が KataGo の所有権と食い違う対局は使わない
   const analysis = analyze(board);
@@ -239,27 +267,32 @@ async function finish(
     if (!region.territory || region.owner === null) continue;
     const sign = region.owner === BLACK ? 1 : -1;
     const avg = region.points.reduce((s, j) => s + own[j], 0) / region.points.length;
-    if (avg * sign < 0.5) return reject("territory"), null;
+    if (avg * sign < 0.5 && reject("territory")) return null;
   }
 
   // 当たりのまま残っている生きた石があれば使わない（後始末が終わっていない）
-  if (hasLiveStoneInAtari(game, board)) return reject("atari"), null;
+  if (hasLiveStoneInAtari(game, board) && reject("atari")) return null;
 
   const position: Position = { board, trays: { [BLACK]: game.captures[BLACK], [WHITE]: game.captures[WHITE] } };
   // こちらで数えた結果が KataGo の形勢判断と大きく食い違う対局は、死活の判定を誤っているとみなす
   const diff = japaneseScore(position);
-  if (Math.abs(diff - ev.blackLead) > Math.max(3, Math.abs(ev.blackLead) * 0.15)) {
-    return reject(`score (ours ${diff}, KataGo ${ev.blackLead.toFixed(1)})`), null;
+  if (
+    Math.abs(diff - ev.blackLead) > Math.max(3, Math.abs(ev.blackLead) * 0.15) &&
+    reject(`score (ours ${diff}, KataGo ${ev.blackLead.toFixed(1)})`)
+  ) {
+    return null;
   }
   const result = diff > 0 ? `B+${diff.toFixed(1)}` : `W+${(-diff).toFixed(1)}`;
-  return orient({ size, komi: KOMI, moves: game.moves.slice(), position, dameFills, result }, random);
+  const finished = { size, komi: KOMI, moves: game.moves.slice(), position, dameFills, setup: [], result };
+  if (record) return { ...finished, komi: record.komi, setup: record.setup };
+  return orient(finished, random);
 }
 
 /**
  * ダメ（両方の色に接する空点）を埋める。所有権の符号の色を優先し、
  * 石を取られたり取ったりしない方の色で埋める。埋められない空点はセキとして残す。
  */
-function fillDame(game: GoGame, board: Board, own: Float32Array): Move[] | null {
+function fillDame(game: GoGame, board: Board, own: Float32Array): { fills: Move[]; unresolved: number } {
   const fills: Move[] = [];
   for (let round = 0; round < board.cells.length; round++) {
     const analysis = analyze(board);
@@ -285,13 +318,11 @@ function fillDame(game: GoGame, board: Board, own: Float32Array): Move[] | null 
     if (!changed) break;
   }
 
-  // 埋めきれなかった中立の空点がセキでないなら（全体に影響がある）使わない
   const analysis = analyze(board);
-  const neutralEmpty = analysis.regions
+  const unresolved = analysis.regions
     .filter((r) => r.owner === null)
     .reduce((n, r) => n + r.points.filter((i) => board.cells[i] === EMPTY).length, 0);
-  if (neutralEmpty > 4) return null;
-  return fills;
+  return { fills, unresolved };
 }
 
 /** 生きた石だけを見て、i に color を置いても石の取り合いが起きないか。 */

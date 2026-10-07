@@ -29,7 +29,9 @@ npm run build      # 型チェックとビルド（dist/）
 | `src/ai/features.ts` | KataGo の入力特徴量 |
 | `src/ai/model.ts` | ONNX 版 KataGo の評価 |
 | `src/ai/generate.ts` | 自動対局と終局処理（死に石・ダメ埋め・盤の向き） |
+| `src/ai/sgf.ts` | SGF の読み込み（本譜と初期配置） |
 | `src/ai/worker.ts`, `src/ai/client.ts` | Web Worker での生成と先読み |
+| `public/samples/` | サンプルの棋譜（セキの確認用など） |
 | `tools/convert_katago.py` | KataGo のモデルファイルを ONNX に変換 |
 | `src/ui/` | 画面（設定・対局・結果） |
 
