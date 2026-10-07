@@ -94,7 +94,7 @@ function showSettings(root: HTMLElement, settings: Settings): void {
             { value: "off", label: "制限なし", checked: !settings.restricted },
           ],
           "担当外の石とは、あなたが整地しない側の石です。vs CPU では、あなたは CPU の地を、CPU はあなたの地を整地します。\n" +
-            "制限あり: 動かせるのは相手の色の石（整地する地の石と、自分の地の中の相手の死に石）だけです。CPU が整地しているあなたの地には石を置けません。\n" +
+            "制限あり: 動かせるのは相手の色の石と、相手の石に接している自分の色の石（黒白の境界線の石）だけです。自分の地の側の石（例: 自分の石の塊の中央）は動かせません。CPU が整地しているあなたの地には石を置けません。\n" +
             "制限なし: どの石も動かせます（CPU の整地を邪魔することもできます）。",
         ),
       ]),
@@ -566,7 +566,7 @@ function showGame(
 
   const pickUp = (points: number[]) => {
     if (!session.pickUp(points) && session.restricted && points.some((i) => session.board.cells[i] !== EMPTY)) {
-      notice(`担当外の石は動かせません（設定で制限しています）。動かせるのは${colorName(cpuColor)}石だけです。`);
+      notice(`担当外の石は動かせません（設定で制限しています）。動かせるのは${colorName(cpuColor)}石と、${colorName(cpuColor)}石に接している境界線の石だけです。`);
     }
   };
 

@@ -25,8 +25,14 @@ function battle(restricted: boolean) {
 }
 
 describe("対戦（2 人で同じ盤を操作）", () => {
-  it("制限ありでは、白（黒地を整地）は白石を持てない（白の塊の中央を抜けない）", () => {
-    const { white } = battle(true);
+  it("制限ありでは、白（黒地を整地）は黒石と境界線の白石だけ持てる（白の塊の中央は抜けない）", () => {
+    const { white, black } = battle(true);
+    expect(white.canPick(6 * 9 + 6)).toBe(false); // 白の塊の中央
+    expect(white.canPick(4 * 9 + 5)).toBe(false); // 白地側の白石
+    expect(white.canPick(0 * 9 + 4)).toBe(true); // 黒石に接する境界線の白石
+    expect(white.canPick(0 * 9 + 3)).toBe(true); // 黒石
+    expect(black.canPick(0 * 9 + 3)).toBe(true); // 黒も境界線の黒石は持てる
+    expect(black.canPick(0 * 9 + 2)).toBe(false); // 空点
     expect(white.pickUp([6 * 9 + 6])).toBe(false);
     expect(white.board.get(6, 6)).toBe(WHITE);
   });

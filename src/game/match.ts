@@ -292,10 +292,19 @@ export class Player {
     return this.color === null || owner === this.color;
   }
 
-  /** 盤上のこの石を持てるか（担当外の石の操作を制限する設定のとき、相手の色の石だけ）。 */
+  /**
+   * 盤上のこの石を持てるか。担当外の石の操作を制限する設定のときは、担当の地（相手の地）の
+   * 整地に関わる石だけ: 相手の色の石と、相手の石（または担当の地）に接している自分の色の石
+   * （黒白の境界線の石）。自分の地の側の石（例: 自分の石の塊の中央）は持てない。
+   */
   canPick(i: number): boolean {
-    if (this.board.cells[i] === EMPTY) return false;
-    return !this.restricted || this.color === null || this.board.cells[i] === opponent(this.color);
+    const cell = this.board.cells[i];
+    if (cell === EMPTY) return false;
+    if (!this.restricted || this.color === null || cell === opponent(this.color)) return true;
+    const target = opponent(this.color);
+    return this.board
+      .neighbors(i)
+      .some((j) => this.match.settledOwner[j] === target || (this.board.cells[j] === target && this.board.isLiveStone(j)));
   }
 
   /** この点に置けるか（制限する設定のとき、自分の地（相手が整地する地）には置けない）。 */
