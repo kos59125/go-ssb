@@ -207,7 +207,6 @@ function replayGame(root: HTMLElement, game: GeneratedGame): Promise<void> {
   const show = () => {
     view.render(new Board(game.size, go.cells.slice()), new Set(), []);
     for (const color of [BLACK, WHITE] as const) {
-      trays[color].count.textContent = `${go.captures[color]} 個`;
       trays[color].view.render(go.captures[color]);
     }
   };
@@ -345,7 +344,6 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
     penaltyLabel.textContent = `ペナルティ ${session.penalties} 回（+${(session.penalties * PENALTY_MS) / 1000} 秒）`;
     openLabel.textContent = session.phase === "arrange" && session.boundaryOpen ? "境界が開いています（閉じた時点で目数を判定します）" : "";
     for (const color of [BLACK, WHITE] as const) {
-      trays[color].count.textContent = `${session.position.trays[color]} 個`;
       trays[color].view.render(session.position.trays[color]);
     }
     renderGhost();
@@ -396,7 +394,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, nex
     if (!fits) {
       notice(owner === BLACK ? "黒のアゲハマには白石だけが入ります。" : "白のアゲハマには黒石だけが入ります。");
     } else {
-      notice(`このトレイのアゲハマは ${session.trayCapacity[owner]} 個です。盤上の石をアゲハマにはできません。`);
+      notice("このトレイはいっぱいです。盤上の石をアゲハマにはできません。");
     }
   };
 
@@ -690,6 +688,7 @@ function countDeadStones(session: Session): number {
 function trayElement(owner: Color) {
   const name = owner === BLACK ? "黒のアゲハマ（白石）" : "白のアゲハマ（黒石）";
   const stoneColor = opponent(owner);
+  // 個数は目数（特にマイナス）の目安になるので表示しない
   const count = h("span", { class: "tray-count" }, []);
   const view = new TrayView(owner, stoneColor);
   const root = h("div", { class: "tray" }, [
