@@ -107,6 +107,80 @@ describe("Session", () => {
     expect(s.pickUp([s.board.index(4, 0)])).toBe(false);
   });
 
+  describe("境界の石を動かす", () => {
+    // 黒地 14 点、白地 21 点。黒は白石を 1 個取っている
+    const WALL = `
+      ..xo...
+      ..xo...
+      ..xo...
+      ..xo...
+      ..xo...
+      ..xo...
+      ..xo...
+    `;
+    const start = (undoOnPenalty = true) =>
+      new Session({ board: parseBoard(WALL), trays: { [BLACK]: 1, [WHITE]: 0 } }, { undoOnPenalty });
+
+    it("境界が開いている間は判定せず、閉じたときに目数が同じならペナルティなし", () => {
+      const s = start();
+      const before = s.scores();
+      // 黒石に接する白の壁 (3,3) を白地の中へ → 境界が開く
+      s.pickUp([s.board.index(3, 3)]);
+      s.placeAt(s.board.index(6, 6));
+      expect(s.boundaryOpen).toBe(true);
+      expect(s.penalties).toBe(0);
+      // 空いた壁をアゲハマ（白石）で塞ぐ → 白地 −1、アゲハマ −1 で目数は同じ
+      s.pickFromTray(BLACK);
+      s.placeAt(s.board.index(3, 3));
+      expect(s.boundaryOpen).toBe(false);
+      expect(s.penalties).toBe(0);
+      expect(s.scores()).toEqual(before);
+    });
+
+    it("閉じたときに目数が変わっていれば、境界が開く前まで戻してペナルティ", () => {
+      const s = new Session(
+        { board: parseBoard(WALL), trays: { [BLACK]: 1, [WHITE]: 1 } },
+        { undoOnPenalty: true },
+      );
+      // 白の壁 (3,3) を白地側に 1 つずらす → (3,3) が中立になり境界が開く
+      s.pickUp([s.board.index(3, 3)]);
+      s.placeAt(s.board.index(4, 3));
+      expect(s.boundaryOpen).toBe(true);
+      expect(s.penalties).toBe(0);
+      // 黒のアゲハマ（黒石）で塞ぐ → 境界は閉じるが目数が変わる
+      s.pickFromTray(WHITE);
+      s.placeAt(s.board.index(3, 3));
+      expect(s.penalties).toBe(1);
+      expect(s.board.get(3, 3)).toBe(WHITE);
+      expect(s.board.get(4, 3)).toBe(0);
+      expect(s.position.trays[WHITE]).toBe(1);
+      expect(s.boundaryOpen).toBe(false);
+    });
+
+    it("境界が開いている間でも、相手の地に置けばその場でペナルティ", () => {
+      const s = new Session(
+        { board: parseBoard(WALL), trays: { [BLACK]: 1, [WHITE]: 1 } },
+        { undoOnPenalty: true },
+      );
+      s.pickUp([s.board.index(3, 3)]);
+      s.placeAt(s.board.index(6, 6));
+      // 黒石を白地に置く
+      s.pickFromTray(WHITE);
+      s.placeAt(s.board.index(5, 0));
+      expect(s.penalties).toBe(1);
+      expect(s.board.get(5, 0)).toBe(0);
+    });
+
+    it("境界が開いたままでは完了できない", () => {
+      const s = start();
+      s.pickUp([s.board.index(3, 3)]);
+      s.placeAt(s.board.index(6, 6));
+      const result = s.complete(s.initialScores);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.problems).toContain("境界が開いている");
+    });
+  });
+
   it("元の位置を再クリックすると持つのをやめる", () => {
     const { s } = session();
     const i = s.board.index(2, 1);

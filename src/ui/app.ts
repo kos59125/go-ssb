@@ -173,6 +173,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, gam
   const phaseLabel = h("div", { class: "phase" }, []);
   const timer = h("div", { class: "timer" }, []);
   const penaltyLabel = h("div", { class: "penalty" }, []);
+  const openLabel = h("div", { class: "note" }, []);
   const message = h("div", { class: "message" }, []);
   // 盤の上に出す目立つ案内（操作できなかった理由など）
   const toast = h("div", { class: "toast" }, []);
@@ -188,6 +189,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, gam
         phaseLabel,
         timer,
         penaltyLabel,
+        openLabel,
         trays[WHITE].root,
         trays[BLACK].root,
         message,
@@ -229,6 +231,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, gam
         ? `① 死に石取り：死に石をアゲハマトレイへ（残り ${countDeadStones(session)} 個）`
         : "② 整地：アゲハマを埋めて地を整える";
     penaltyLabel.textContent = `ペナルティ ${session.penalties} 回（+${(session.penalties * PENALTY_MS) / 1000} 秒）`;
+    openLabel.textContent = session.phase === "arrange" && session.boundaryOpen ? "境界が開いています（閉じた時点で目数を判定します）" : "";
     for (const color of [BLACK, WHITE] as const) {
       trays[color].count.textContent = `${session.position.trays[color]} 個`;
       trays[color].root.classList.toggle("disabled", session.phase === "removal" && !session.hand);

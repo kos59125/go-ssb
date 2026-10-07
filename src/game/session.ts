@@ -49,6 +49,14 @@ export class Session {
   readonly marks = new Set<number>();
   phase: Phase = "removal";
   penalties = 0;
+  /** 開始時の中立の空点（セキ）の数。これより多ければ境界が開いている。 */
+  private readonly baseOpen: number;
+  /** 最後に境界が閉じていた時点の状態。境界を開いたまま誤った場合はここまで戻す。 */
+  private settled!: Snapshot;
+  /** settled の時点で各点がどちらの地だったか（地でなければ EMPTY）。 */
+  private settledOwner!: Uint8Array;
+  /** 境界が開いてから置いた石と、持ち上げた元の点。 */
+  private pending = { placed: [] as number[], origins: [] as number[], carriedMark: false };
   readonly startedAt: number;
   finishedAt: number | null = null;
 
@@ -56,8 +64,15 @@ export class Session {
     this.position = { board: position.board.clone(), trays: { ...position.trays } };
     this.options = options;
     this.initialScores = this.scores();
+    this.baseOpen = openPoints(this.board);
+    this.markSettled();
     this.startedAt = this.now();
     this.updatePhase();
+  }
+
+  /** 境界が開いているか（どちらの地でもない空点が開始時より多い）。 */
+  get boundaryOpen(): boolean {
+    return openPoints(this.board) > this.baseOpen;
   }
 
   get board(): Board {
@@ -189,7 +204,8 @@ export class Session {
     if (this.hand) problems.push("石を持っている");
     if (this.phase === "removal") problems.push("死に石が残っている");
     const scores = this.scores();
-    if (!sameScores(scores, this.initialScores)) problems.push("間違えて置いた石がある");
+    if (this.boundaryOpen) problems.push("境界が開いている");
+    else if (!sameScores(scores, this.initialScores)) problems.push("間違えて置いた石がある");
     const analysis = analyze(this.board);
     for (const color of [BLACK, WHITE] as const) {
       const name = color === BLACK ? "黒地" : "白地";
@@ -206,27 +222,87 @@ export class Session {
     return { ok: true };
   }
 
-  /** 手が空になった時点でペナルティを判定する（仕様書 §2.5）。 */
+  /**
+   * 手が空になった時点でペナルティを判定する（仕様書 §2.5）。
+   *
+   * - 相手の地に石を置いたなど明らかな誤りは、その場でペナルティ。
+   * - 境界が開いている間は判定を保留し、閉じた時点で目数を比べる。
+   *   境界の石を動かしても、目数が変わらなければペナルティにしない。
+   */
   private settle(hand: Hand): void {
-    const scores = this.scores();
-    const correct = sameScores(scores, this.initialScores);
-    if (!correct && sameScores(scores, hand.before.scores)) {
-      // 間違えた石を別の場所に動かしただけなら、印も一緒に動かす
-      if (hand.carriedMark) for (const i of hand.placed) this.marks.add(i);
-    } else if (!correct) {
-      this.penalties++;
-      // 死に石取りのフェーズでは、間違えて取った石は設定によらず元に戻す
-      if (this.options.undoOnPenalty || this.phase === "removal") {
-        this.restore(hand.before);
-      } else {
+    const origins = hand.origin.kind === "board" ? hand.origin.points : [];
+    if (this.phase === "removal") {
+      this.settleRemoval(hand);
+      return;
+    }
+
+    if (this.placedInEnemyTerritory(hand.placed)) {
+      if (hand.carriedMark) {
+        // 間違えた石を別の誤った場所に動かしただけなら、印も一緒に動かす
         for (const i of hand.placed) this.marks.add(i);
-        if (hand.origin.kind === "board") {
-          for (const i of hand.origin.points) this.marks.add(i);
-        }
+      } else {
+        this.penalize(hand.before, hand.placed, origins);
       }
+      return;
+    }
+
+    const pending = this.pending;
+    pending.placed.push(...hand.placed);
+    pending.origins.push(...origins);
+    pending.carriedMark ||= hand.carriedMark;
+    if (this.boundaryOpen) return;
+
+    this.pending = { placed: [], origins: [], carriedMark: false };
+    const scores = this.scores();
+    if (sameScores(scores, this.initialScores)) {
+      this.marks.clear();
+    } else if (sameScores(scores, this.settled.scores)) {
+      if (pending.carriedMark) for (const i of pending.placed) this.marks.add(i);
+    } else {
+      this.penalize(this.settled, pending.placed, pending.origins);
+      return;
+    }
+    this.markSettled();
+  }
+
+  /** 死に石取りのフェーズ: 生きた石を取ったら、設定によらず元に戻す。 */
+  private settleRemoval(hand: Hand): void {
+    if (!sameScores(this.scores(), this.initialScores)) {
+      this.penalties++;
+      this.restore(hand.before);
+    }
+    this.updatePhase();
+    this.markSettled();
+  }
+
+  /** ペナルティを科し、設定に応じて restoreTo まで戻すか、印を付ける。 */
+  private penalize(restoreTo: Snapshot, placed: number[], origins: number[]): void {
+    this.penalties++;
+    this.pending = { placed: [], origins: [], carriedMark: false };
+    if (this.options.undoOnPenalty) {
+      this.restore(restoreTo);
+    } else {
+      for (const i of [...placed, ...origins]) this.marks.add(i);
     }
     if (sameScores(this.scores(), this.initialScores)) this.marks.clear();
-    this.updatePhase();
+    if (!this.boundaryOpen) this.markSettled();
+  }
+
+  private markSettled(): void {
+    this.settled = this.snapshot();
+    this.settledOwner = new Uint8Array(this.board.cells.length);
+    for (const region of analyze(this.board).regions) {
+      if (!region.territory || region.owner === null) continue;
+      for (const i of region.points) this.settledOwner[i] = region.owner;
+    }
+  }
+
+  /**
+   * 置いた石のどれかが相手の地の中にあるか。境界が開いている間も判定できるよう、
+   * 最後に境界が閉じていた時点の地で判定する。
+   */
+  private placedInEnemyTerritory(placed: number[]): boolean {
+    return placed.some((i) => this.settledOwner[i] === opponent(this.board.cells[i] as Color));
   }
 
   private updatePhase(): void {
@@ -252,6 +328,16 @@ export class Session {
   private now(): number {
     return (this.options.now ?? Date.now)();
   }
+}
+
+/** どちらの地でもない空点の数。 */
+function openPoints(board: Board): number {
+  let n = 0;
+  for (const region of analyze(board).regions) {
+    if (region.owner !== null) continue;
+    for (const i of region.points) if (board.cells[i] === EMPTY) n++;
+  }
+  return n;
 }
 
 function sameScores(a: Record<Color, number>, b: Record<Color, number>): boolean {
