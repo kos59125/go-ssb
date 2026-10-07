@@ -305,6 +305,34 @@ describe("Session", () => {
       expect(s.boundaryOpen).toBe(true);
     });
 
+    it("白の壁石を黒石に置き換えると、その点だけに印を付ける", () => {
+      // 白 (2,3) が黒の側に突き出している。黒は白石を 1 個取っている
+      const s = new Session(
+        {
+          board: parseBoard(`
+            ..xo...
+            ..xo...
+            ..xo...
+            .xoo...
+            ..xo...
+            ..xo...
+            ..xo...
+          `),
+          trays: { [BLACK]: 1, [WHITE]: 0 },
+        },
+        { undoOnPenalty: false },
+      );
+      s.pickUp([s.board.index(2, 3)]);
+      s.placeAt(s.board.index(6, 6)); // 白の突き出しを白地へ → 境界が開く
+      s.pickFromTray(BLACK);
+      s.placeAt(s.board.index(5, 5)); // 白地にアゲハマを埋める（正しい操作）
+      s.pickUp([s.board.index(1, 3)]);
+      s.placeAt(s.board.index(2, 3)); // 白石だった点を黒に → 境界は閉じるが黒白とも目数が変わる
+      expect(s.boundaryOpen).toBe(false);
+      expect(s.penalties).toBe(1);
+      expect([...s.marks]).toEqual([s.board.index(2, 3)]);
+    });
+
     it("境界が開いたままでは完了できない", () => {
       const s = start();
       s.pickUp([s.board.index(3, 3)]);

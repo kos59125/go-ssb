@@ -79,6 +79,8 @@ export class Session {
   private settled!: Snapshot;
   /** settled の時点で各点がどちらの地だったか（地でなければ EMPTY）。 */
   private settledOwner!: Uint8Array;
+  /** settled の時点の各点の持ち主（生きた石の色、または地の色。どちらでもなければ EMPTY）。 */
+  private settledColor!: Uint8Array;
   /** 境界が開いてから置いた石と、持ち上げた元の点。 */
   private pending = { placed: [] as number[], origins: [] as number[], carriedMark: false };
   /** 各トレイに入れられる石の上限（アゲハマの総数）。生きた石をアゲハマにはできない。 */
@@ -407,7 +409,10 @@ export class Session {
     } else if (sameScores(scores, this.settled.scores)) {
       if (pending.carriedMark) for (const i of pending.placed) this.marks.add(i);
     } else {
-      this.penalize(this.settled, pending.placed, pending.origins);
+      // 境界が開く前と比べて、持ち主が黒⇔白で入れ替わった点が原因（例: 白の壁石を黒石に置き換えた）。
+      // 見つからなければ、境界が開いてから動かした石すべてに印を付ける
+      const flipped = this.flippedPoints();
+      this.penalize(this.settled, flipped.length > 0 ? flipped : pending.placed, flipped.length > 0 ? [] : pending.origins);
       return;
     }
     this.markSettled();
@@ -450,6 +455,18 @@ export class Session {
       if (!region.territory || region.owner === null) continue;
       for (const i of region.points) this.settledOwner[i] = region.owner;
     }
+    this.settledColor = colorMap(this.board);
+  }
+
+  /** settled の時点から、持ち主（石の色または地の色）が黒⇔白で入れ替わった点。 */
+  private flippedPoints(): number[] {
+    const now = colorMap(this.board);
+    const points: number[] = [];
+    for (let i = 0; i < now.length; i++) {
+      const before = this.settledColor[i];
+      if (before !== EMPTY && now[i] !== EMPTY && before !== now[i]) points.push(i);
+    }
+    return points;
   }
 
   /**
@@ -497,6 +514,17 @@ export class Session {
   private now(): number {
     return (this.options.now ?? Date.now)();
   }
+}
+
+/** 各点の持ち主: 生きた石ならその色、地ならその色、どちらでもなければ EMPTY。 */
+function colorMap(board: Board): Uint8Array {
+  const map = new Uint8Array(board.cells.length);
+  for (const region of analyze(board).regions) {
+    if (!region.territory || region.owner === null) continue;
+    for (const i of region.points) map[i] = region.owner;
+  }
+  for (let i = 0; i < map.length; i++) if (board.isLiveStone(i)) map[i] = board.cells[i];
+  return map;
 }
 
 /** どちらの地でもない空点の数。 */
