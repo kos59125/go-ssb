@@ -169,8 +169,20 @@ function showGame(root: HTMLElement, settings: Settings, position: Position): vo
   const toast = h("div", { class: "toast" }, []);
   const ghost = h("div", { class: "ghost" }, []);
   const trays = { [BLACK]: trayElement(BLACK), [WHITE]: trayElement(WHITE) };
-  const completeButton = h("button", { class: "primary" }, ["完了"]);
-  const quitButton = h("button", {}, ["やめる"]);
+  const quitButton = h("button", { type: "button" }, ["やめる"]);
+  // 目数の入力欄は最初から出しておく（仕様書 §2.6）
+  const blackInput = h("input", { type: "number", step: "1", required: "", inputmode: "numeric" }, []);
+  const whiteInput = h("input", { type: "number", step: "1", required: "", inputmode: "numeric" }, []);
+  const scoreForm = h("form", { class: "score-form" }, [
+    h("div", { class: "score-inputs" }, [
+      h("label", {}, ["黒地", blackInput, "目"]),
+      h("label", {}, ["白地", whiteInput, "目"]),
+    ]),
+    h("p", { class: "note" }, ["アゲハマが地より多いときはマイナスで入力します。"]),
+    h("div", { class: "buttons" }, [h("button", { class: "primary" }, ["完了"]), quitButton]),
+  ]);
+  const resultBox = h("div", { class: "result-box" }, []);
+  resultBox.hidden = true;
 
   // 左クリック（タップ）で置く石の色。右クリックでは反対の色を置く
   let primaryColor: Color = BLACK;
@@ -196,7 +208,8 @@ function showGame(root: HTMLElement, settings: Settings, position: Position): vo
         trays[WHITE].root,
         trays[BLACK].root,
         message,
-        h("div", { class: "buttons" }, [completeButton, quitButton]),
+        scoreForm,
+        resultBox,
       ]),
     ]),
     ghost,
@@ -400,18 +413,44 @@ function showGame(root: HTMLElement, settings: Settings, position: Position): vo
     showSettings(root, settings);
   });
 
-  completeButton.addEventListener("click", async () => {
-    const answer = await askScores(root);
-    if (!answer) return;
-    const result = session.complete(answer);
+  scoreForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const result = session.complete({ [BLACK]: Number(blackInput.value), [WHITE]: Number(whiteInput.value) });
     if (result.ok) {
-      cleanup();
-      showResult(root, settings, session);
+      finish();
     } else {
       flash(`まだ完了していません（+${PENALTY_MS / 1000} 秒）`);
       render();
     }
   });
+
+  /** 整地完了: 画面はそのままで、操作を止めて結果をパネルに出す。 */
+  const finish = () => {
+    cleanup();
+    updateTimer();
+    render();
+    phaseLabel.textContent = "整地完了！";
+    openLabel.textContent = "";
+    message.textContent = "";
+    root.querySelector(".game")!.classList.add("finished");
+    const time = session.elapsed();
+    const best = loadBest(settings.size);
+    const isBest = best === null || time < best;
+    if (isBest) saveBest(settings.size, time);
+    const again = h("button", { class: "primary" }, ["もう一度"]);
+    const back = h("button", {}, ["設定に戻る"]);
+    again.addEventListener("click", () => void prepareGame(root, settings));
+    back.addEventListener("click", () => showSettings(root, settings));
+    for (const input of [blackInput, whiteInput]) input.disabled = true;
+    scoreForm.querySelector(".buttons")!.remove();
+    colorPicker.hidden = true;
+    resultBox.replaceChildren(
+      h("p", {}, [`黒 ${session.initialScores[BLACK]} 目・白 ${session.initialScores[WHITE]} 目`]),
+      h("p", {}, [isBest ? `${settings.size} 路のベストタイム更新！` : `${settings.size} 路のベスト: ${formatTime(best!)}`]),
+      h("div", { class: "buttons" }, [again, back]),
+    );
+    resultBox.hidden = false;
+  };
 
   render();
 }
@@ -459,56 +498,6 @@ function trayElement(owner: Color) {
     view.svg,
   ]);
   return { root, count, view };
-}
-
-/** 完了時の目数入力ダイアログ。キャンセルなら null。 */
-function askScores(root: HTMLElement): Promise<Record<Color, number> | null> {
-  return new Promise((resolve) => {
-    const black = h("input", { type: "number", required: "", step: "1" }, []);
-    const white = h("input", { type: "number", required: "", step: "1" }, []);
-    const form = h("form", { method: "dialog" }, [
-      h("h2", {}, ["目数を入力"]),
-      h("label", {}, ["黒地", black, "目"]),
-      h("label", {}, ["白地", white, "目"]),
-      h("p", { class: "note" }, ["アゲハマが地より多いときはマイナスで入力します。"]),
-      h("div", { class: "buttons" }, [
-        h("button", { value: "cancel", formnovalidate: "" }, ["戻る"]),
-        h("button", { value: "ok", class: "primary" }, ["判定する"]),
-      ]),
-    ]);
-    const dialog = h("dialog", {}, [form]);
-    root.append(dialog);
-    dialog.addEventListener("close", () => {
-      dialog.remove();
-      if (dialog.returnValue !== "ok") return resolve(null);
-      resolve({ [BLACK]: Number(black.value), [WHITE]: Number(white.value) });
-    });
-    dialog.showModal();
-    black.focus();
-  });
-}
-
-function showResult(root: HTMLElement, settings: Settings, session: Session): void {
-  const time = session.elapsed();
-  const best = loadBest(settings.size);
-  const isBest = best === null || time < best;
-  if (isBest) saveBest(settings.size, time);
-  const again = h("button", { class: "primary" }, ["もう一度"]);
-  const back = h("button", {}, ["設定に戻る"]);
-  root.replaceChildren(
-    h("main", { class: "result" }, [
-      h("h1", {}, ["整地完了！"]),
-      h("p", { class: "result-time" }, [formatTime(time)]),
-      h("p", {}, [`ペナルティ ${session.penalties} 回（+${(session.penalties * PENALTY_MS) / 1000} 秒）`]),
-      h("p", {}, [
-        `黒 ${session.initialScores[BLACK]} 目・白 ${session.initialScores[WHITE]} 目`,
-      ]),
-      h("p", {}, [isBest ? `${settings.size} 路のベストタイム更新！` : `${settings.size} 路のベスト: ${formatTime(best!)}`]),
-      h("div", { class: "buttons" }, [again, back]),
-    ]),
-  );
-  again.addEventListener("click", () => void prepareGame(root, settings));
-  back.addEventListener("click", () => showSettings(root, settings));
 }
 
 function pointsInRect(size: number, a: number, b: number): number[] {

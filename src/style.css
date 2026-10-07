@@ -44,8 +44,7 @@ button.primary {
   color: #fff;
 }
 
-.settings,
-.result {
+.settings {
   max-width: 420px;
   margin: 0 auto;
   padding: 32px 16px;
@@ -95,12 +94,6 @@ button.primary {
 
 .note {
   font-size: 0.85em;
-}
-
-.result-time {
-  font-size: 3em;
-  font-variant-numeric: tabular-nums;
-  margin: 0;
 }
 
 .game {
@@ -252,22 +245,45 @@ button.primary {
   gap: 8px;
 }
 
-dialog {
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--panel);
-  color: var(--fg);
-}
-
-dialog form {
+.score-form {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
-dialog input {
-  width: 6em;
-  margin: 0 6px;
+.score-inputs {
+  display: flex;
+  gap: 12px;
+}
+
+.score-inputs label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.score-inputs input {
+  width: 4.5em;
+}
+
+.result-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.result-box p {
+  margin: 0;
+}
+
+.game.finished .phase {
+  color: var(--accent);
+  font-size: 1.3em;
+}
+
+.game.finished .board {
+  cursor: default;
 }
 
 @media (max-width: 768px) {
