@@ -111,7 +111,7 @@ export class Cpu {
   private areaPoints(): number[] {
     const points: number[] = [];
     for (const color of this.player.assigned) {
-      const layout = this.layouts.get(color);
+      const layout = this.validPlan(color);
       if (layout) points.push(...layout.area);
     }
     return points;
@@ -291,8 +291,17 @@ export class Cpu {
   /** color の地の計画が今の盤で使えるか確かめ、使えなければ立て直す。 */
   private validPlan(color: Color): Layout | null {
     const board = this.player.board;
+    const { regions, regionOf } = analyze(board);
+    // 計画を立てた後に盤が変わって（相手が境界の近くの石を動かしたなど）、範囲の石が境界の石に
+    // なっていたら使えない。境界の石を動かすと境界が開くので、範囲を今の盤で確かめ直す。
     const usable = (layout: Layout) =>
-      [...layout.area].every((i) => board.cells[i] === EMPTY || (board.cells[i] === color && board.isLiveStone(i)));
+      [...layout.area].every((i) => {
+        if (board.cells[i] === EMPTY) return regions[regionOf[i]].owner === color && regions[regionOf[i]].territory;
+        if (board.cells[i] !== color || !board.isLiveStone(i)) return false;
+        return board.neighbors(i).every((j) =>
+          board.cells[j] === EMPTY ? layout.area.has(j) : board.cells[j] === color && board.isLiveStone(j),
+        );
+      });
     const current = this.layouts.get(color);
     if (current && usable(current)) return current;
     const held = this.player.hand?.stones.filter((s) => s.color === color).length ?? 0;

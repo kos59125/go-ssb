@@ -127,4 +127,20 @@ describe("Cpu", () => {
       expect(cpuPlayer.penalties).toBe(0);
     }
   });
+
+  it("計画を立てた後に範囲の石が境界の石になったら、計画を立て直してその石を動かさない", () => {
+    const { human, cpu, match } = setup(BLACK);
+    human.capture(1 * 11 + 1);
+    type Plan = { area: Set<number> } | null;
+    const validPlan = (cpu as unknown as { validPlan(c: number): Plan }).validPlan.bind(cpu);
+    const board = match.board;
+    const area = validPlan(BLACK)!.area;
+    // 範囲の黒石と、それに接する範囲外の黒石
+    const inner = [...area].find((i) => board.cells[i] === BLACK && board.neighbors(i).some((j) => board.cells[j] === BLACK && !area.has(j)))!;
+    const outside = board.neighbors(inner).find((j) => board.cells[j] === BLACK && !area.has(j))!;
+    expect(inner).toBeDefined();
+    // 相手が範囲外の石を白石に替えると、inner は境界の石になる
+    board.set(outside % 11, Math.floor(outside / 11), WHITE);
+    expect(validPlan(BLACK)?.area.has(inner) ?? false).toBe(false);
+  });
 });
