@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { BLACK, Board, WHITE } from "../core/board";
-import { Cpu } from "./cpu";
+import { mulberry32 } from "../core/random";
+import { Cpu, CpuLevel } from "./cpu";
 import { planLayouts } from "./layout";
 import { Match, Player } from "./match";
 import { Session } from "./session";
@@ -22,14 +23,14 @@ function makeBoard(): Board {
   return board;
 }
 
-function setup(humanColor: typeof BLACK | typeof WHITE) {
+function setup(humanColor: typeof BLACK | typeof WHITE, level?: CpuLevel, seed = 1, undoOnPenalty = true) {
   let t = 0;
   const position = { board: makeBoard(), trays: { [BLACK]: 4, [WHITE]: 4 } };
-  const match = new Match(position, { undoOnPenalty: true, now: () => t });
+  const match = new Match(position, { undoOnPenalty, now: () => t });
   const human = new Player(match, { color: humanColor, restricted: true });
   const cpuPlayer = new Player(match, { color: humanColor === BLACK ? WHITE : BLACK });
   const layouts = planLayouts(position);
-  const cpu = new Cpu(cpuPlayer, layouts);
+  const cpu = new Cpu(cpuPlayer, layouts, { level, random: mulberry32(seed) });
   match.begin();
   return { match, human, cpuPlayer, cpu, tick: (ms: number) => (t += ms) };
 }
@@ -91,5 +92,39 @@ describe("Cpu", () => {
     }
     expect(session.phase).toBe("finished");
     expect(session.penalties).toBe(0);
+  });
+
+  for (const undoOnPenalty of [true, false]) {
+    it(`弱い CPU は整地ミス（ペナルティ）や無駄な操作をしても、最後は完了する（ペナルティ時: ${undoOnPenalty ? "元に戻す" : "そのまま"}）`, () => {
+      let mistakes = 0;
+      for (let seed = 1; seed <= 20; seed++) {
+        const { human, cpuPlayer, cpu, match } = setup(BLACK, "beginner", seed, undoOnPenalty);
+        human.capture(1 * 11 + 1);
+        let steps = 0;
+        while (cpuPlayer.phase !== "finished" && steps < 1000) {
+          cpu.step();
+          steps++;
+        }
+        expect(cpuPlayer.phase, `seed ${seed}`).toBe("finished");
+        expect(human.penalties).toBe(0);
+        expect(match.scores()).toEqual(match.initialScores);
+        mistakes += cpuPlayer.penalties;
+      }
+      expect(mistakes).toBeGreaterThan(0);
+    });
+  }
+
+  it("達人の CPU はミスをしない", () => {
+    for (let seed = 1; seed <= 10; seed++) {
+      const { human, cpuPlayer, cpu } = setup(BLACK, "expert", seed);
+      human.capture(1 * 11 + 1);
+      let steps = 0;
+      while (cpuPlayer.phase !== "finished" && steps < 200) {
+        cpu.step();
+        steps++;
+      }
+      expect(cpuPlayer.phase).toBe("finished");
+      expect(cpuPlayer.penalties).toBe(0);
+    }
   });
 });

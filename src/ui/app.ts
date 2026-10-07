@@ -4,9 +4,9 @@ import { GoGame } from "../ai/go";
 import { GameRecord, parseSgf } from "../ai/sgf";
 import { Position, analyze } from "../core/analysis";
 import { BLACK, Board, Color, EMPTY, WHITE, opponent } from "../core/board";
-import { randomSeed, seedNumber } from "../core/random";
+import { mulberry32, randomSeed, seedNumber } from "../core/random";
 import { dummyPosition } from "../game/dummy";
-import { CPU_INTERVAL, Cpu, CpuAction, CpuLevel } from "../game/cpu";
+import { CPU_LEVELS, Cpu, CpuAction, CpuLevel, isCpuLevel } from "../game/cpu";
 import { planLayouts, SerializedLayout } from "../game/layout";
 import { Match, Player } from "../game/match";
 import { PENALTY_MS, Session } from "../game/session";
@@ -79,12 +79,15 @@ function showSettings(root: HTMLElement, settings: Settings): void {
         radioGroup(
           "CPU の強さ",
           "cpu-level",
-          [
-            { value: "easy", label: "やさしい", checked: settings.cpuLevel === "easy" },
-            { value: "normal", label: "ふつう", checked: settings.cpuLevel === "normal" },
-            { value: "hard", label: "つよい", checked: settings.cpuLevel === "hard" },
-          ],
-          "CPU が 1 回操作する間隔です（やさしい 2.5 秒、ふつう 1.5 秒、つよい 0.8 秒）。",
+          (Object.keys(CPU_LEVELS) as CpuLevel[]).map((level) => ({
+            value: level,
+            label: CPU_LEVELS[level].label,
+            checked: settings.cpuLevel === level,
+          })),
+          "強さによって、CPU が 1 回操作する間隔と、ミスの多さが変わります。\n" +
+            (Object.keys(CPU_LEVELS) as CpuLevel[])
+              .map((level) => `${CPU_LEVELS[level].label}: ${CPU_LEVELS[level].interval / 1000} 秒ごと、${MISTAKE_TEXT[level]}`)
+              .join("\n"),
         ),
         radioGroup(
           "担当外の石の操作",
@@ -358,7 +361,11 @@ function showGame(
     const match = new Match(position, { undoOnPenalty: settings.undoOnPenalty });
     session = new Player(match, { color: myColor, restricted: settings.restricted });
     // CPU は人の地（myColor の地）を整地する
-    cpu = new Cpu(new Player(match, { color: cpuColor }), layouts ?? {});
+    // CPU のミスや無駄な操作の乱数は、終局図のシードとは別に毎回ランダムに決める
+    cpu = new Cpu(new Player(match, { color: cpuColor }), layouts ?? {}, {
+      level: settings.cpuLevel,
+      random: mulberry32(seedNumber(randomSeed())),
+    });
   } else {
     session = new Session(position, { undoOnPenalty: settings.undoOnPenalty });
   }
@@ -500,7 +507,8 @@ function showGame(
             : cpuWaiting
               ? "待機中"
               : `${colorName(myColor)}地を整地中`;
-      cpuStatus.textContent = `CPU（${colorName(cpuColor)}）: ${state}`;
+      const cpuPenalty = cpuPlayer.penalties > 0 ? `（ペナルティ ${cpuPlayer.penalties} 回）` : "";
+      cpuStatus.textContent = `CPU（${colorName(cpuColor)}）: ${state}${cpuPenalty}`;
     }
     // 石を持っているときは grabbing、持っていないときは grab のカーソル
     document.body.classList.toggle("holding", !!session.hand);
@@ -940,7 +948,7 @@ function showGame(
       const box = view.svg.getBoundingClientRect();
       const { x, y } = view.pointBox(action.point);
       target = { x: box.left + x, y: box.top + y };
-    } else if (action?.kind === "pick-tray") {
+    } else if (action?.kind === "pick-tray" || action?.kind === "drop-tray") {
       // どちらのトレイから持ったかは、持っている石の色で決まる
       const held = cpu.player.hand?.stones.at(-1);
       const owner = held ? opponent(held.color) : trayOwner;
@@ -963,13 +971,15 @@ function showGame(
       if (decided && gaveUpAt === null) return;
       if (cpu!.player.phase === "finished") return;
       const before = session.penalties;
+      const cpuBefore = cpu!.player.penalties;
       const action = cpu!.step();
       cpuWaiting = action.kind === "idle" && cpu!.player.phase === "arrange";
       moveCpuCursor(action);
       penaltyCheck(before);
+      if (gaveUpAt === null && cpu!.player.penalties > cpuBefore) notice(`CPU がミスしました（+${PENALTY_MS / 1000} 秒）`);
       render();
       decide();
-    }, CPU_INTERVAL[settings.cpuLevel]);
+    }, CPU_LEVELS[settings.cpuLevel].interval);
     cleanups.push(() => window.clearInterval(timer));
   };
 
@@ -1098,6 +1108,14 @@ function formatTime(ms: number): string {
   return `${minutes}:${String(seconds).padStart(2, "0")}.${total % 10}`;
 }
 
+const MISTAKE_TEXT: Record<CpuLevel, string> = {
+  beginner: "整地ミスや無駄な操作が多い",
+  easy: "ときどき整地ミスや無駄な操作をする",
+  normal: "たまに整地ミスや無駄な操作をする",
+  hard: "ミスや無駄な操作はまれ",
+  expert: "ミスや無駄な操作をしない",
+};
+
 function loadSettings(): Settings {
   const fallback: Settings = {
     mode: "solo",
@@ -1111,7 +1129,9 @@ function loadSettings(): Settings {
   };
   try {
     const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "{}");
-    return { ...fallback, ...saved, seed: fallback.seed };
+    const settings = { ...fallback, ...saved, seed: fallback.seed };
+    if (!isCpuLevel(settings.cpuLevel)) settings.cpuLevel = fallback.cpuLevel;
+    return settings;
   } catch {
     return fallback;
   }
