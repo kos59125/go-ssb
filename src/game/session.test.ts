@@ -40,6 +40,22 @@ describe("Session", () => {
     expect(s.position.trays).toEqual({ [BLACK]: 1, [WHITE]: 1 });
   });
 
+  it("死に石取りでは、クリックした石がそのままアゲハマトレイに入る", () => {
+    const { s } = session();
+    expect(s.capture(s.board.index(2, 1))).toBe(true);
+    expect(s.hand).toBeNull();
+    expect(s.position.trays[BLACK]).toBe(1);
+    expect(s.capture(s.board.index(7, 4))).toBe(true);
+    expect(s.position.trays[WHITE]).toBe(1);
+    expect(s.phase).toBe("arrange");
+    // 生きた石はペナルティで元に戻る
+    const { s: t } = session();
+    t.capture(t.board.index(4, 0));
+    expect(t.penalties).toBe(1);
+    expect(t.board.get(4, 0)).toBe(BLACK);
+    expect(t.hand).toBeNull();
+  });
+
   it("死に石取りで生きた石を取るとペナルティで、設定によらず元に戻る", () => {
     const { s } = session(false);
     const i = s.board.index(4, 0);

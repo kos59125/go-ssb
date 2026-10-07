@@ -335,7 +335,11 @@ function showGame(root: HTMLElement, settings: Settings, position: Position): vo
         // 範囲選択（押した点が空点でも石でもよい）。持っている石に追加する
         session.pickUp(pointsInRect(settings.size, drag.start, drag.current));
       } else if (i === drag.start) {
-        if (session.board.cells[i] !== EMPTY) session.pickUp([i]);
+        // 死に石取りの間は、クリックした石をそのままアゲハマトレイへ
+        if (session.board.cells[i] !== EMPTY) {
+          if (session.phase === "removal") session.capture(i);
+          else session.pickUp([i]);
+        }
         else if (session.hand) place(i, color);
       } else if (tray !== null) {
         dropToTray(tray);

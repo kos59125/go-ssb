@@ -124,6 +124,18 @@ export class Session {
     return true;
   }
 
+  /**
+   * 死に石取り: 盤上の石を取り上げて、取った側のアゲハマトレイに入れる
+   * （黒石は白のトレイ、白石は黒のトレイ）。持っている石があれば、それも一緒に入れる。
+   * 死に石でなければ、手が空になった時点の判定でペナルティになり元に戻る。
+   */
+  capture(i: number): boolean {
+    if (this.phase !== "removal" || !this.pickUp([i])) return false;
+    this.dropToTray(BLACK);
+    this.dropToTray(WHITE);
+    return true;
+  }
+
   /** アゲハマトレイから石を count 個持つ。石を持っている最中なら追加する。 */
   pickFromTray(owner: Color, count = 1): boolean {
     const n = Math.min(count, this.position.trays[owner]);
