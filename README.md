@@ -23,3 +23,13 @@ npm run build      # 型チェックとビルド（dist/）
 | `src/core/shapes.ts` | 区間の形の判定（10 の倍数・余り） |
 | `src/core/judge.ts` | 整地完了と死に石取りフェーズの判定 |
 | `src/core/placement.ts` | 複数の石を置くときの配置 |
+| `src/game/session.ts` | ひとりでモードのゲーム進行（フェーズ・ペナルティ・完了判定） |
+| `src/game/dummy.ts` | 仮の終局図生成（KataGo 導入までのつなぎ） |
+| `src/ui/` | 画面（設定・対局・結果） |
+
+## 公開
+
+`main` に push すると GitHub Actions でビルドし、GitHub Pages に公開します。
+初回のみ、リポジトリの Settings → Pages → Source を「GitHub Actions」に設定してください。
+
+動作確認用に `?seed=123` を URL に付けると、仮の終局図を固定できます。

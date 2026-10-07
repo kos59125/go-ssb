@@ -1,0 +1,278 @@
+:root {
+  --bg: #f4efe6;
+  --fg: #2b2620;
+  --muted: #7a6f62;
+  --panel: #fffaf2;
+  --border: #d8cbb6;
+  --accent: #b5452b;
+  --board: #dcb35c;
+  --line: #4a3a20;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+button,
+select,
+input {
+  font: inherit;
+}
+
+button {
+  padding: 0.4em 0.9em;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.settings,
+.result {
+  max-width: 420px;
+  margin: 0 auto;
+  padding: 32px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.lead,
+.note {
+  color: var(--muted);
+  margin: 0;
+}
+
+.note {
+  font-size: 0.85em;
+}
+
+.result-time {
+  font-size: 3em;
+  font-variant-numeric: tabular-nums;
+  margin: 0;
+}
+
+.game {
+  display: flex;
+  gap: 16px;
+  padding: 12px;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.board-wrap {
+  width: min(calc(100vh - 24px), calc(100vw - 300px));
+  min-width: 280px;
+}
+
+.board {
+  width: 100%;
+  height: auto;
+  display: block;
+  touch-action: none;
+}
+
+.board-bg {
+  fill: var(--board);
+}
+
+.grid line {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.star {
+  fill: var(--line);
+}
+
+.stone.black {
+  fill: #1c1c1c;
+}
+
+.stone.white {
+  fill: #fafafa;
+  stroke: #555;
+  stroke-width: 1;
+}
+
+.origin {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-dasharray: 4 3;
+}
+
+.mark {
+  stroke: #e0322a;
+  stroke-width: 4;
+  stroke-linecap: round;
+}
+
+.selection {
+  fill: rgb(181 69 43 / 0.15);
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.panel {
+  width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.phase {
+  font-weight: bold;
+}
+
+.timer {
+  font-size: 2.4em;
+  font-variant-numeric: tabular-nums;
+}
+
+.penalty,
+.message {
+  color: var(--accent);
+  min-height: 1.4em;
+}
+
+.tray {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  min-height: 80px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tray.disabled .tray-buttons {
+  opacity: 0.5;
+}
+
+.tray-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tray-count {
+  margin-left: auto;
+  font-weight: bold;
+}
+
+.tray-buttons {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.9em;
+}
+
+.tray-buttons button {
+  padding: 0.2em 0.6em;
+}
+
+.tray-stone,
+.ghost-stone {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+}
+
+.black {
+  background: #1c1c1c;
+}
+
+.white {
+  background: #fafafa;
+  border: 1px solid #555;
+}
+
+.ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.ghost-stone {
+  width: 22px;
+  height: 22px;
+  margin-left: -10px;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.4);
+}
+
+.ghost-count {
+  margin-left: 4px;
+  font-weight: bold;
+}
+
+.buttons {
+  display: flex;
+  gap: 8px;
+}
+
+dialog {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--fg);
+}
+
+dialog form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+dialog input {
+  width: 6em;
+  margin: 0 6px;
+}
+
+@media (max-width: 768px) {
+  .game {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 8px 16px;
+  }
+
+  .board-wrap {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .panel {
+    width: 100%;
+  }
+}

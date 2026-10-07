@@ -1,0 +1,408 @@
+import { BLACK, Color, EMPTY, WHITE } from "../core/board";
+import { dummyPosition } from "../game/dummy";
+import { PENALTY_MS, Session } from "../game/session";
+import { BoardView } from "./boardView";
+
+interface Settings {
+  size: number;
+  undoOnPenalty: boolean;
+}
+
+const SETTINGS_KEY = "go-ssb:settings";
+const BEST_KEY = (size: number) => `go-ssb:best:${size}`;
+
+/** スマートフォン相当の画面では 19 路を選べない（仕様書 §6）。 */
+const isSmallScreen = () => window.matchMedia("(max-width: 768px)").matches;
+
+export function startApp(root: HTMLElement): void {
+  showSettings(root, loadSettings());
+}
+
+function showSettings(root: HTMLElement, settings: Settings): void {
+  const small = isSmallScreen();
+  if (small && settings.size === 19) settings.size = 13;
+  root.replaceChildren(
+    h("main", { class: "settings" }, [
+      h("h1", {}, ["囲碁スピード整地バトル"]),
+      h("p", { class: "lead" }, ["ひとりで：黒地と白地を両方整地して、タイムを競います。"]),
+      h("label", {}, [
+        "盤のサイズ",
+        h(
+          "select",
+          { id: "size" },
+          [19, 13, 9].map((n) =>
+            h("option", { value: String(n), ...(n === settings.size ? { selected: "" } : {}), ...(small && n === 19 ? { disabled: "" } : {}) }, [
+              `${n} 路`,
+            ]),
+          ),
+        ),
+      ]),
+      h("label", {}, [
+        "開始時の表示",
+        h("select", { id: "start" }, [
+          h("option", { value: "final" }, ["終局図から"]),
+          h("option", { value: "replay", disabled: "" }, ["棋譜を並べてから（準備中）"]),
+        ]),
+      ]),
+      h("label", {}, [
+        "ペナルティ時の石",
+        h("select", { id: "undo" }, [
+          h("option", { value: "undo", ...(settings.undoOnPenalty ? { selected: "" } : {}) }, ["元に戻す"]),
+          h("option", { value: "keep", ...(!settings.undoOnPenalty ? { selected: "" } : {}) }, ["そのまま（印を付ける）"]),
+        ]),
+      ]),
+      h("p", { class: "note" }, ["※ 終局図は現在、仮の生成方法で作っています（KataGo による生成は準備中）。"]),
+      h("button", { id: "start-button", class: "primary" }, ["スタート"]),
+      h("p", { class: "links" }, [h("a", { href: "https://github.com/kos59125/go-ssb/blob/main/docs/rulebook.md", target: "_blank" }, ["ルールブック"])]),
+    ]),
+  );
+  root.querySelector("#start-button")!.addEventListener("click", () => {
+    const next: Settings = {
+      size: Number(root.querySelector<HTMLSelectElement>("#size")!.value),
+      undoOnPenalty: root.querySelector<HTMLSelectElement>("#undo")!.value === "undo",
+    };
+    saveSettings(next);
+    showGame(root, next);
+  });
+}
+
+type Drag =
+  | { kind: "carry"; from: number | null }
+  | { kind: "select"; start: number; current: number }
+  | null;
+
+function showGame(root: HTMLElement, settings: Settings): void {
+  // ?seed=123 で局面を固定できる（動作確認用）
+  const seed = Number(new URLSearchParams(location.search).get("seed")) || Date.now();
+  const session = new Session(dummyPosition(settings.size, seed), { undoOnPenalty: settings.undoOnPenalty });
+  const view = new BoardView(settings.size);
+
+  const phaseLabel = h("div", { class: "phase" }, []);
+  const timer = h("div", { class: "timer" }, []);
+  const penaltyLabel = h("div", { class: "penalty" }, []);
+  const message = h("div", { class: "message" }, []);
+  const ghost = h("div", { class: "ghost" }, []);
+  const trays = { [BLACK]: trayElement(BLACK), [WHITE]: trayElement(WHITE) };
+  const completeButton = h("button", { class: "primary" }, ["完了"]);
+  const quitButton = h("button", {}, ["やめる"]);
+
+  root.replaceChildren(
+    h("main", { class: "game" }, [
+      h("div", { class: "board-wrap" }, [view.svg]),
+      h("aside", { class: "panel" }, [
+        phaseLabel,
+        timer,
+        penaltyLabel,
+        trays[WHITE].root,
+        trays[BLACK].root,
+        message,
+        h("div", { class: "buttons" }, [completeButton, quitButton]),
+      ]),
+    ]),
+    ghost,
+  );
+
+  let drag: Drag = null;
+  let pointer = { x: 0, y: 0 };
+  let messageTimer = 0;
+
+  const flash = (text: string) => {
+    message.textContent = text;
+    window.clearTimeout(messageTimer);
+    messageTimer = window.setTimeout(() => (message.textContent = ""), 3000);
+  };
+
+  const render = () => {
+    const origin = session.hand?.origin;
+    view.render(session.board, session.marks, origin?.kind === "board" ? origin.points : []);
+    phaseLabel.textContent =
+      session.phase === "removal" ? "① 死に石取り：死に石をアゲハマトレイへ" : "② 整地：アゲハマを埋めて地を整える";
+    penaltyLabel.textContent = `ペナルティ ${session.penalties} 回（+${(session.penalties * PENALTY_MS) / 1000} 秒）`;
+    for (const color of [BLACK, WHITE] as const) {
+      trays[color].count.textContent = `${session.position.trays[color]} 個`;
+      trays[color].root.classList.toggle("disabled", session.phase === "removal" && !session.hand);
+    }
+    renderGhost();
+  };
+
+  const renderGhost = () => {
+    const stones = session.hand?.stones ?? [];
+    ghost.style.display = stones.length === 0 ? "none" : "";
+    if (stones.length === 0) return;
+    ghost.style.transform = `translate(${pointer.x + 12}px, ${pointer.y + 12}px)`;
+    ghost.replaceChildren(
+      ...stones.slice(0, 5).map((s) => h("span", { class: `ghost-stone ${s.color === BLACK ? "black" : "white"}` }, [])),
+      h("span", { class: "ghost-count" }, [stones.length > 1 ? `×${stones.length}` : ""]),
+    );
+  };
+
+  const penaltyCheck = (before: number) => {
+    if (session.penalties > before) flash(`ペナルティ！ +${PENALTY_MS / 1000} 秒`);
+  };
+
+  // --- 盤の操作 ---
+  view.svg.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    const i = view.pointAt(e.clientX, e.clientY);
+    if (i === null) return;
+    pointer = { x: e.clientX, y: e.clientY };
+    const before = session.penalties;
+    if (session.hand) {
+      if (session.isOrigin(i)) session.cancel();
+      else if (session.board.cells[i] === EMPTY && !session.placeAt(i) && session.phase === "removal") {
+        flash("死に石取りの間は、アゲハマトレイにだけ置けます");
+      }
+      penaltyCheck(before);
+    } else if (session.board.cells[i] !== EMPTY) {
+      session.pickUp([i]);
+      drag = { kind: "carry", from: i };
+    } else {
+      drag = { kind: "select", start: i, current: i };
+    }
+    e.preventDefault();
+    render();
+  });
+
+  const onMove = (e: PointerEvent) => {
+    pointer = { x: e.clientX, y: e.clientY };
+    if (drag?.kind === "select") {
+      const i = view.pointAt(e.clientX, e.clientY);
+      if (i !== null) drag.current = i;
+      view.showSelection(drag.start, drag.current);
+    }
+    renderGhost();
+  };
+
+  const onUp = (e: PointerEvent) => {
+    if (!drag) return;
+    const before = session.penalties;
+    if (drag.kind === "carry") {
+      const tray = trayUnder(e.clientX, e.clientY);
+      const i = view.pointAt(e.clientX, e.clientY);
+      const origin = session.hand?.origin;
+      // トレイの「持つ」ボタンを離しただけなら、持ったままにする
+      const backToOrigin = origin?.kind === "tray" && origin.owner === tray;
+      if (tray !== null) {
+        if (!backToOrigin) session.dropToTray(tray);
+      }
+      else if (i !== null && i !== drag.from && session.board.cells[i] === EMPTY) session.placeAt(i);
+    } else {
+      view.showSelection(null, null);
+      session.pickUp(pointsInRect(settings.size, drag.start, drag.current));
+    }
+    drag = null;
+    penaltyCheck(before);
+    render();
+  };
+
+  const trayUnder = (x: number, y: number): Color | null => {
+    const target = document.elementFromPoint(x, y);
+    if (trays[BLACK].root.contains(target)) return BLACK;
+    if (trays[WHITE].root.contains(target)) return WHITE;
+    return null;
+  };
+
+  // --- アゲハマトレイの操作 ---
+  for (const color of [BLACK, WHITE] as const) {
+    const tray = trays[color];
+    tray.root.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || (e.target as HTMLElement).closest("button")) return;
+      const before = session.penalties;
+      if (session.hand) session.dropToTray(color);
+      penaltyCheck(before);
+      render();
+    });
+    for (const [button, n] of tray.takeButtons) {
+      button.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        if (session.phase === "removal") {
+          flash("死に石をすべて取り上げると、アゲハマを持てます");
+          return;
+        }
+        const count = n ?? session.position.trays[color];
+        for (let k = 0; k < count; k++) if (!session.pickFromTray(color)) break;
+        if (session.hand) drag = { kind: "carry", from: null };
+        pointer = { x: e.clientX, y: e.clientY };
+        render();
+      });
+    }
+  }
+
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === "Escape") {
+      session.cancel();
+      render();
+    }
+  };
+  const onContextMenu = (e: MouseEvent) => {
+    if (!session.hand) return;
+    e.preventDefault();
+    session.cancel();
+    render();
+  };
+
+  document.addEventListener("pointermove", onMove);
+  document.addEventListener("pointerup", onUp);
+  document.addEventListener("keydown", onKey);
+  document.addEventListener("contextmenu", onContextMenu);
+  const updateTimer = () => (timer.textContent = formatTime(session.elapsed()));
+  const tick = window.setInterval(updateTimer, 100);
+  updateTimer();
+
+  const cleanup = () => {
+    document.removeEventListener("pointermove", onMove);
+    document.removeEventListener("pointerup", onUp);
+    document.removeEventListener("keydown", onKey);
+    document.removeEventListener("contextmenu", onContextMenu);
+    window.clearInterval(tick);
+    window.clearTimeout(messageTimer);
+  };
+
+  quitButton.addEventListener("click", () => {
+    cleanup();
+    showSettings(root, settings);
+  });
+
+  completeButton.addEventListener("click", async () => {
+    const answer = await askScores(root);
+    if (!answer) return;
+    const result = session.complete(answer);
+    if (result.ok) {
+      cleanup();
+      showResult(root, settings, session);
+    } else {
+      flash(`まだ完了していません（+${PENALTY_MS / 1000} 秒）`);
+      render();
+    }
+  });
+
+  render();
+}
+
+function trayElement(owner: Color) {
+  const name = owner === BLACK ? "黒のアゲハマ（白石）" : "白のアゲハマ（黒石）";
+  const stoneClass = owner === BLACK ? "white" : "black";
+  const count = h("span", { class: "tray-count" }, []);
+  const takeButtons: [HTMLButtonElement, number | null][] = [
+    [h("button", {}, ["1 個"]), 1],
+    [h("button", {}, ["5 個"]), 5],
+    [h("button", {}, ["全部"]), null],
+  ];
+  const root = h("div", { class: "tray" }, [
+    h("div", { class: "tray-title" }, [h("span", { class: `tray-stone ${stoneClass}` }, []), name, count]),
+    h("div", { class: "tray-buttons" }, ["持つ：", ...takeButtons.map(([b]) => b)]),
+  ]);
+  return { root, count, takeButtons };
+}
+
+/** 完了時の目数入力ダイアログ。キャンセルなら null。 */
+function askScores(root: HTMLElement): Promise<Record<Color, number> | null> {
+  return new Promise((resolve) => {
+    const black = h("input", { type: "number", required: "", step: "1" }, []);
+    const white = h("input", { type: "number", required: "", step: "1" }, []);
+    const form = h("form", { method: "dialog" }, [
+      h("h2", {}, ["目数を入力"]),
+      h("label", {}, ["黒地", black, "目"]),
+      h("label", {}, ["白地", white, "目"]),
+      h("p", { class: "note" }, ["アゲハマが地より多いときはマイナスで入力します。"]),
+      h("div", { class: "buttons" }, [
+        h("button", { value: "cancel", formnovalidate: "" }, ["戻る"]),
+        h("button", { value: "ok", class: "primary" }, ["判定する"]),
+      ]),
+    ]);
+    const dialog = h("dialog", {}, [form]);
+    root.append(dialog);
+    dialog.addEventListener("close", () => {
+      dialog.remove();
+      if (dialog.returnValue !== "ok") return resolve(null);
+      resolve({ [BLACK]: Number(black.value), [WHITE]: Number(white.value) });
+    });
+    dialog.showModal();
+    black.focus();
+  });
+}
+
+function showResult(root: HTMLElement, settings: Settings, session: Session): void {
+  const time = session.elapsed();
+  const best = loadBest(settings.size);
+  const isBest = best === null || time < best;
+  if (isBest) saveBest(settings.size, time);
+  const again = h("button", { class: "primary" }, ["もう一度"]);
+  const back = h("button", {}, ["設定に戻る"]);
+  root.replaceChildren(
+    h("main", { class: "result" }, [
+      h("h1", {}, ["整地完了！"]),
+      h("p", { class: "result-time" }, [formatTime(time)]),
+      h("p", {}, [`ペナルティ ${session.penalties} 回（+${(session.penalties * PENALTY_MS) / 1000} 秒）`]),
+      h("p", {}, [
+        `黒 ${session.initialScores[BLACK]} 目・白 ${session.initialScores[WHITE]} 目`,
+      ]),
+      h("p", {}, [isBest ? `${settings.size} 路のベストタイム更新！` : `${settings.size} 路のベスト: ${formatTime(best!)}`]),
+      h("div", { class: "buttons" }, [again, back]),
+    ]),
+  );
+  again.addEventListener("click", () => showGame(root, settings));
+  back.addEventListener("click", () => showSettings(root, settings));
+}
+
+function pointsInRect(size: number, a: number, b: number): number[] {
+  const [x1, y1, x2, y2] = [a % size, Math.floor(a / size), b % size, Math.floor(b / size)];
+  const points: number[] = [];
+  for (let y = Math.min(y1, y2); y <= Math.max(y1, y2); y++) {
+    for (let x = Math.min(x1, x2); x <= Math.max(x1, x2); x++) points.push(y * size + x);
+  }
+  return points;
+}
+
+function formatTime(ms: number): string {
+  const total = Math.floor(ms / 100);
+  const minutes = Math.floor(total / 600);
+  const seconds = Math.floor((total % 600) / 10);
+  return `${minutes}:${String(seconds).padStart(2, "0")}.${total % 10}`;
+}
+
+function loadSettings(): Settings {
+  const fallback: Settings = { size: 19, undoOnPenalty: true };
+  try {
+    return { ...fallback, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "{}") };
+  } catch {
+    return fallback;
+  }
+}
+
+function saveSettings(settings: Settings): void {
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  } catch {
+    // 保存できなくてもゲームは続けられる
+  }
+}
+
+function loadBest(size: number): number | null {
+  try {
+    const value = localStorage.getItem(BEST_KEY(size));
+    return value === null ? null : Number(value);
+  } catch {
+    return null;
+  }
+}
+
+function saveBest(size: number, ms: number): void {
+  try {
+    localStorage.setItem(BEST_KEY(size), String(ms));
+  } catch {
+    // 保存できなくてもゲームは続けられる
+  }
+}
+
+function h<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  attrs: Record<string, string>,
+  children: (Node | string)[],
+): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+  node.append(...children);
+  return node;
+}
