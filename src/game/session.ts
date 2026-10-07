@@ -70,8 +70,11 @@ export class Session {
   private settledOwner!: Uint8Array;
   /** 境界が開いてから置いた石と、持ち上げた元の点。 */
   private pending = { placed: [] as number[], origins: [] as number[], carriedMark: false };
-  readonly startedAt: number;
+  /** 開始の合図（begin）の時刻。合図の前は null。 */
+  startedAt: number | null = null;
   finishedAt: number | null = null;
+  /** 死に石取りで、死に石でないために元に戻した石の点（演出用）。読んだら clearRejected で消す。 */
+  rejected: { point: number; color: Color }[] = [];
 
   constructor(position: Position, options: SessionOptions) {
     this.position = { board: position.board.clone(), trays: { ...position.trays } };
@@ -79,8 +82,20 @@ export class Session {
     this.initialScores = this.scores();
     this.baseOpen = openPoints(this.board);
     this.markSettled();
-    this.startedAt = this.now();
     this.updatePhase();
+  }
+
+  /** 開始の合図。ここからタイムを計る。 */
+  begin(): void {
+    this.startedAt ??= this.now();
+  }
+
+  get started(): boolean {
+    return this.startedAt !== null;
+  }
+
+  clearRejected(): void {
+    this.rejected = [];
   }
 
   /** 境界が開いているか（どちらの地でもない空点が開始時より多い）。 */
@@ -102,6 +117,7 @@ export class Session {
 
   /** ペナルティ込みの経過時間（ミリ秒）。 */
   elapsed(): number {
+    if (this.startedAt === null) return 0;
     return (this.finishedAt ?? this.now()) - this.startedAt + this.penalties * PENALTY_MS;
   }
 
@@ -137,8 +153,8 @@ export class Session {
    */
   capture(i: number): boolean {
     if (this.phase !== "removal" || !this.pickUp([i])) return false;
-    this.dropToTray(BLACK);
-    this.dropToTray(WHITE);
+    this.dropToTray(BLACK, Infinity);
+    this.dropToTray(WHITE, Infinity);
     return true;
   }
 
@@ -215,16 +231,20 @@ export class Session {
 
   /**
    * 持っている石をアゲハマトレイに移す。トレイ owner には相手の色の石だけが入る。
-   * 入らない色の石は持ったままにする。
+   * 盤に置くときと同じく、持った順に count 個（既定は 1 個）ずつ入れる。入らない色の石は持ったまま。
    */
-  dropToTray(owner: Color): boolean {
+  dropToTray(owner: Color, count = 1): boolean {
     const hand = this.hand;
     if (!hand) return false;
     const color = opponent(owner);
-    const fits = hand.stones.filter((s) => s.color === color);
-    if (fits.length === 0) return false;
-    this.position.trays[owner] += fits.length;
-    hand.stones = hand.stones.filter((s) => s.color !== color);
+    let moved = 0;
+    hand.stones = hand.stones.filter((s) => {
+      if (moved >= count || s.color !== color) return true;
+      moved++;
+      return false;
+    });
+    if (moved === 0) return false;
+    this.position.trays[owner] += moved;
     if (hand.stones.length === 0) {
       this.hand = null;
       this.settle(hand);
@@ -307,6 +327,10 @@ export class Session {
   private settleRemoval(hand: Hand): void {
     if (!sameScores(this.scores(), this.initialScores)) {
       this.penalties++;
+      // 元に戻す前の盤で、取り上げた点にあった石の色を記録する（演出用）
+      this.rejected = hand.origins
+        .filter((point) => hand.before.dead[point] === 0)
+        .map((point) => ({ point, color: hand.before.cells[point] as Color }));
       this.restore(hand.before);
     }
     this.updatePhase();

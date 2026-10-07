@@ -22,6 +22,7 @@ const BOARD = `
 function session(undoOnPenalty = true, trays = { [BLACK]: 0, [WHITE]: 0 }) {
   let t = 0;
   const s = new Session({ board: parseBoard(BOARD), trays }, { undoOnPenalty, now: () => t });
+  s.begin();
   return { s, tick: (ms: number) => (t += ms) };
 }
 
@@ -40,6 +41,25 @@ describe("Session", () => {
     expect(s.position.trays).toEqual({ [BLACK]: 1, [WHITE]: 1 });
   });
 
+  it("合図の前はタイムが進まない", () => {
+    let t = 0;
+    const s = new Session({ board: parseBoard(BOARD), trays: { [BLACK]: 0, [WHITE]: 0 } }, { undoOnPenalty: true, now: () => t });
+    t = 5000;
+    expect(s.elapsed()).toBe(0);
+    s.begin();
+    t = 7000;
+    expect(s.elapsed()).toBe(2000);
+  });
+
+  it("トレイには 1 回に 1 個ずつ入れる", () => {
+    const { s } = session(true, { [BLACK]: 3, [WHITE]: 0 });
+    removeDead(s);
+    s.pickFromTray(BLACK, 3);
+    expect(s.dropToTray(BLACK)).toBe(true);
+    expect(s.hand?.stones).toHaveLength(2);
+    expect(s.position.trays[BLACK]).toBe(2);
+  });
+
   it("死に石取りでは、クリックした石がそのままアゲハマトレイに入る", () => {
     const { s } = session();
     expect(s.capture(s.board.index(2, 1))).toBe(true);
@@ -52,6 +72,7 @@ describe("Session", () => {
     const { s: t } = session();
     t.capture(t.board.index(4, 0));
     expect(t.penalties).toBe(1);
+    expect(t.rejected).toEqual([{ point: t.board.index(4, 0), color: BLACK }]);
     expect(t.board.get(4, 0)).toBe(BLACK);
     expect(t.hand).toBeNull();
   });

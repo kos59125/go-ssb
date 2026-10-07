@@ -1,5 +1,6 @@
 /// <reference lib="webworker" />
 import * as ort from "onnxruntime-web/wasm";
+import { mulberry32 } from "../core/random";
 import { GenerationCancelled, KOMI, generateGame } from "./generate";
 import type { WorkerRequest, WorkerResponse } from "./protocol";
 import { Evaluator, createEvaluator } from "./model";
@@ -26,12 +27,13 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
   queue = queue.then(() => handle(request));
 };
 
-async function handle({ id, size, modelUrl }: Extract<WorkerRequest, { type: "generate" }>): Promise<void> {
+async function handle({ id, size, seed, modelUrl }: Extract<WorkerRequest, { type: "generate" }>): Promise<void> {
   const post = (msg: WorkerResponse) => self.postMessage(msg);
   try {
     const evaluate = await getEvaluator(modelUrl);
     const game = await generateGame(evaluate, {
       size,
+      random: mulberry32(seed),
       onMove: (move) => post({ type: "progress", id, move }),
       shouldStop: () => cancelled.has(id),
     });

@@ -23,7 +23,8 @@ npm run build      # 型チェックとビルド（dist/）
 | `src/core/shapes.ts` | 区間の形の判定（10 の倍数・余り） |
 | `src/core/judge.ts` | 整地完了と死に石取りフェーズの判定 |
 | `src/game/session.ts` | ひとりでモードのゲーム進行（フェーズ・ペナルティ・完了判定） |
-| `src/game/dummy.ts` | 仮の終局図生成（`?seed=123` での動作確認用） |
+| `src/game/dummy.ts` | 仮の終局図生成（`?dummy=123` での動作確認用） |
+| `src/core/random.ts` | シード付き乱数 |
 | `src/ai/go.ts` | 自動対局用の囲碁ルール（取り・コウ・自殺手） |
 | `src/ai/features.ts` | KataGo の入力特徴量 |
 | `src/ai/model.ts` | ONNX 版 KataGo の評価 |
@@ -37,7 +38,7 @@ npm run build      # 型チェックとビルド（dist/）
 `main` に push すると GitHub Actions でビルドし、GitHub Pages に公開します。
 初回のみ、リポジトリの Settings → Pages → Source を「GitHub Actions」に設定してください。
 
-動作確認用に `?seed=123` を URL に付けると、KataGo を使わずに仮の終局図（seed で固定）で遊べます。
+動作確認用に `?dummy=123` を URL に付けると、KataGo を使わずに仮の終局図（123 をシードに固定）で遊べます。
 
 ## KataGo ネットワークの変換
 

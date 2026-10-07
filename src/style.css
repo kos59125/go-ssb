@@ -365,3 +365,171 @@ button.primary {
   font-weight: normal;
   color: var(--muted);
 }
+
+.seed-group input {
+  flex: 1;
+  min-width: 8em;
+  font-variant-numeric: tabular-nums;
+}
+
+.seed-note {
+  margin-top: 4px;
+}
+
+/* 開始のカウントダウン */
+.countdown {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgb(43 38 32 / 0.25);
+  z-index: 2;
+}
+
+.countdown-spinner {
+  position: relative;
+  width: 160px;
+  height: 160px;
+  display: grid;
+  place-items: center;
+}
+
+.countdown-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 10px solid rgb(255 250 242 / 0.35);
+  border-top-color: var(--accent);
+  background: rgb(255 250 242 / 0.85);
+  animation: spin 1s linear infinite;
+}
+
+.countdown-number {
+  position: relative;
+  font-size: 64px;
+  font-weight: bold;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+
+.countdown-number.pop {
+  animation: pop 1s ease-out;
+}
+
+.countdown.go {
+  background: transparent;
+  animation: fade-out 0.7s ease-in forwards;
+}
+
+.countdown.go .countdown-ring {
+  animation: none;
+  border-color: var(--accent);
+}
+
+.countdown.go .countdown-number {
+  font-size: 30px;
+  color: var(--accent);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pop {
+  0% {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+  25% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+/* 死に石でない石を取ろうとしたときの演出 */
+.game.shake {
+  animation: shake 0.45s ease-in-out;
+}
+
+@keyframes shake {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  15% {
+    transform: translate(-10px, 2px);
+  }
+  30% {
+    transform: translate(9px, -2px);
+  }
+  45% {
+    transform: translate(-7px, 1px);
+  }
+  60% {
+    transform: translate(5px, -1px);
+  }
+  75% {
+    transform: translate(-3px, 0);
+  }
+}
+
+.reject-fx {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 3;
+  box-shadow: 0 4px 10px rgb(0 0 0 / 0.35);
+  animation: float-away 0.9s ease-out forwards;
+}
+
+.reject-fx.black {
+  background: #1c1c1c;
+}
+
+.reject-fx.white {
+  background: #fafafa;
+  border: 1px solid #555;
+}
+
+.reject-fx::before,
+.reject-fx::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 70%;
+  height: 12%;
+  border-radius: 4px;
+  background: #e0322a;
+}
+
+.reject-fx::before {
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.reject-fx::after {
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
+
+@keyframes float-away {
+  0% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+  30% {
+    transform: translateY(-12px) scale(1.15);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-60px) scale(1.1);
+    opacity: 0;
+  }
+}

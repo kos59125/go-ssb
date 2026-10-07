@@ -3,6 +3,7 @@ import { GeneratedGame } from "../ai/generate";
 import { GoGame } from "../ai/go";
 import { Position } from "../core/analysis";
 import { BLACK, Board, Color, EMPTY, WHITE, opponent } from "../core/board";
+import { randomSeed, seedNumber } from "../core/random";
 import { dummyPosition } from "../game/dummy";
 import { PENALTY_MS, Session } from "../game/session";
 import { BoardView } from "./boardView";
@@ -13,6 +14,8 @@ interface Settings {
   undoOnPenalty: boolean;
   /** 開始時に初手から棋譜を並べるか（仕様書 §5.1）。 */
   replay: boolean;
+  /** 終局図を作るシード。保存せず、画面を開くたびにランダムに決める。 */
+  seed: string;
 }
 
 /** 棋譜の再生にかける時間。 */
@@ -30,9 +33,9 @@ export function startApp(root: HTMLElement): void {
   showSettings(root, loadSettings());
 }
 
-/** ?seed=123 を付けると、KataGo を使わずに仮の局面で遊ぶ（動作確認用）。 */
-function debugSeed(): number | null {
-  return Number(new URLSearchParams(location.search).get("seed")) || null;
+/** ?dummy=123 を付けると、KataGo を使わずに仮の局面で遊ぶ（動作確認用）。 */
+function dummySeed(): number | null {
+  return Number(new URLSearchParams(location.search).get("dummy")) || null;
 }
 
 function showSettings(root: HTMLElement, settings: Settings): void {
@@ -55,24 +58,44 @@ function showSettings(root: HTMLElement, settings: Settings): void {
         { value: "undo", label: "元に戻す", checked: settings.undoOnPenalty },
         { value: "keep", label: "そのまま（印を付ける）", checked: !settings.undoOnPenalty },
       ]),
-      h("p", { class: "note" }, ["終局図は KataGo の自動対局でその場で作ります。初回はネットワーク（約 4 MB）を読み込みます。"]),
+      h("fieldset", { class: "radio-group seed-group" }, [
+        h("legend", {}, ["シード"]),
+        h("input", { type: "text", id: "seed", value: settings.seed, spellcheck: "false", autocomplete: "off" }, []),
+        h("button", { type: "button", id: "reseed" }, ["別のシード"]),
+      ]),
+      h("p", { class: "note" }, [
+        "終局図は KataGo の自動対局でその場で作ります。同じ盤サイズとシードなら同じ終局図になります。初回はネットワーク（約 4 MB）を読み込みます。",
+      ]),
       h("button", { id: "start-button", class: "primary" }, ["スタート"]),
       h("p", { class: "links" }, [h("a", { href: "https://github.com/kos59125/go-ssb/blob/main/docs/rulebook.md", target: "_blank" }, ["ルールブック"])]),
     ]),
   );
   const selected = (name: string) => root.querySelector<HTMLInputElement>(`input[name="${name}"]:checked`)!.value;
+  const seedInput = root.querySelector<HTMLInputElement>("#seed")!;
   // 設定を選んでいる間に、裏で終局図を作っておく
-  if (!debugSeed()) generator.prefetch(settings.size);
+  const prefetch = () => {
+    if (!dummySeed() && seedInput.value.trim()) generator.prefetch(Number(selected("size")), seedNumber(seedInput.value));
+  };
+  prefetch();
   for (const input of root.querySelectorAll<HTMLInputElement>('input[name="size"]')) {
-    input.addEventListener("change", () => {
-      if (!debugSeed()) generator.prefetch(Number(selected("size")));
-    });
+    input.addEventListener("change", prefetch);
   }
+  let seedTimer = 0;
+  seedInput.addEventListener("input", () => {
+    window.clearTimeout(seedTimer);
+    seedTimer = window.setTimeout(prefetch, 500);
+  });
+  root.querySelector("#reseed")!.addEventListener("click", () => {
+    seedInput.value = randomSeed();
+    prefetch();
+  });
   root.querySelector("#start-button")!.addEventListener("click", () => {
+    window.clearTimeout(seedTimer);
     const next: Settings = {
       size: Number(selected("size")),
       undoOnPenalty: selected("undo") === "undo",
       replay: selected("start") === "replay",
+      seed: seedInput.value.trim() || randomSeed(),
     };
     saveSettings(next);
     void prepareGame(root, next);
@@ -81,9 +104,12 @@ function showSettings(root: HTMLElement, settings: Settings): void {
 
 /** 終局図を用意し、設定に応じて棋譜を再生してから対局を始める。 */
 async function prepareGame(root: HTMLElement, settings: Settings): Promise<void> {
-  const seed = debugSeed();
-  if (seed) {
-    showGame(root, settings, dummyPosition(settings.size, seed));
+  const seed = seedNumber(settings.seed);
+  // 次のゲーム（「もう一度」）のシードを決めて、遊んでいる間に作っておく
+  const nextSeed = randomSeed();
+  const dummy = dummySeed();
+  if (dummy) {
+    showGame(root, settings, dummyPosition(settings.size, dummy), nextSeed);
     return;
   }
 
@@ -92,24 +118,25 @@ async function prepareGame(root: HTMLElement, settings: Settings): Promise<void>
   let cancelled = false;
   back.addEventListener("click", () => {
     cancelled = true;
-    showSettings(root, settings);
+    showSettings(root, { ...settings, seed: randomSeed() });
   });
   root.replaceChildren(h("main", { class: "settings" }, [h("h1", {}, ["終局図を生成中"]), status, back]));
 
   let game: GeneratedGame;
   try {
-    game = await generator.take(settings.size, (move) => (status.textContent = `自動対局中… ${move} 手目`));
+    game = await generator.take(settings.size, seed, (move) => (status.textContent = `自動対局中… ${move} 手目`));
   } catch (err) {
     if (cancelled) return;
     status.textContent = `終局図を生成できませんでした（${err instanceof Error ? err.message : err}）。`;
     const fallback = h("button", { class: "primary" }, ["仮の局面で遊ぶ"]);
-    fallback.addEventListener("click", () => showGame(root, settings, dummyPosition(settings.size)));
+    fallback.addEventListener("click", () => showGame(root, settings, dummyPosition(settings.size, seed), nextSeed));
     status.after(fallback);
     return;
   }
   if (cancelled) return;
+  generator.prefetch(settings.size, seedNumber(nextSeed));
   if (settings.replay) await replayGame(root, game);
-  showGame(root, settings, game.position);
+  showGame(root, settings, game.position, nextSeed);
 }
 
 /** 棋譜を REPLAY_MS かけて並べる。 */
@@ -165,7 +192,8 @@ type Drag =
   | { kind: "tray"; owner: Color; start: number; current: number; button: number }
   | null;
 
-function showGame(root: HTMLElement, settings: Settings, position: Position): void {
+/** nextSeed: 「もう一度」と「設定に戻る」で使う次のシード。 */
+function showGame(root: HTMLElement, settings: Settings, position: Position, nextSeed: string): void {
   const session = new Session(position, { undoOnPenalty: settings.undoOnPenalty });
   const view = new BoardView(settings.size);
 
@@ -176,6 +204,11 @@ function showGame(root: HTMLElement, settings: Settings, position: Position): vo
   const message = h("div", { class: "message" }, []);
   // 盤の上に出す目立つ案内（操作できなかった理由など）
   const toast = h("div", { class: "toast" }, []);
+  // 開始のカウントダウン（仕様書 §2.7）。合図までは操作できない
+  const countdownNumber = h("span", { class: "countdown-number" }, []);
+  const countdown = h("div", { class: "countdown" }, [
+    h("div", { class: "countdown-spinner" }, [h("div", { class: "countdown-ring" }, []), countdownNumber]),
+  ]);
   const ghost = h("div", { class: "ghost" }, []);
   const trays = { [BLACK]: trayElement(BLACK), [WHITE]: trayElement(WHITE) };
   const quitButton = h("button", { type: "button" }, ["やめる"]);
@@ -207,7 +240,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position): vo
 
   root.replaceChildren(
     h("main", { class: "game" }, [
-      h("div", { class: "board-wrap" }, [view.svg, toast]),
+      h("div", { class: "board-wrap" }, [view.svg, toast, countdown]),
       h("aside", { class: "panel" }, [
         phaseLabel,
         timer,
@@ -219,6 +252,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position): vo
         message,
         scoreForm,
         resultBox,
+        h("p", { class: "note seed-note" }, [`シード: ${settings.seed}`]),
       ]),
     ]),
     ghost,
@@ -226,6 +260,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position): vo
 
   let drag: Drag = null;
   let pointer = { x: 0, y: 0 };
+  const cleanups: (() => void)[] = [];
   let messageTimer = 0;
   let toastTimer = 0;
 
@@ -304,7 +339,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position): vo
 
   // --- 押す ---
   view.svg.addEventListener("pointerdown", (e) => {
-    if (e.button !== 0 && e.button !== 2) return;
+    if (!session.started || (e.button !== 0 && e.button !== 2)) return;
     const i = view.pointAt(e.clientX, e.clientY);
     if (i === null) return;
     pointer = { x: e.clientX, y: e.clientY };
@@ -316,7 +351,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position): vo
   for (const owner of [BLACK, WHITE] as const) {
     const tray = trays[owner];
     tray.root.addEventListener("pointerdown", (e) => {
-      if (e.button !== 0 && e.button !== 2) return;
+      if (!session.started || (e.button !== 0 && e.button !== 2)) return;
       pointer = { x: e.clientX, y: e.clientY };
       const cell = tray.view.cellAt(e.clientX, e.clientY) ?? -1;
       drag = { kind: "tray", owner, start: cell, current: cell, button: e.button };
@@ -388,7 +423,28 @@ function showGame(root: HTMLElement, settings: Settings, position: Position): vo
     }
     drag = null;
     penaltyCheck(before);
+    showRejected();
     render();
+  };
+
+  /** 死に石取りで死に石でない石を取ろうとしたとき: 画面を揺らし、×付きの石を浮かび上がらせて消す。 */
+  const showRejected = () => {
+    if (session.rejected.length === 0) return;
+    const wrap = view.svg.parentElement!;
+    for (const { point, color } of session.rejected) {
+      const { x, y, r } = view.pointBox(point);
+      const fx = h("div", { class: `reject-fx ${color === BLACK ? "black" : "white"}` }, []);
+      fx.style.left = `${x - r}px`;
+      fx.style.top = `${y - r}px`;
+      fx.style.width = fx.style.height = `${r * 2}px`;
+      fx.addEventListener("animationend", () => fx.remove());
+      wrap.append(fx);
+    }
+    session.clearRejected();
+    const main = root.querySelector(".game")!;
+    main.classList.remove("shake");
+    void (main as HTMLElement).offsetWidth; // アニメーションをやり直す
+    main.classList.add("shake");
   };
 
   const trayUnder = (x: number, y: number): Color | null => {
@@ -421,6 +477,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position): vo
   updateTimer();
 
   const cleanup = () => {
+    for (const f of cleanups) f();
     document.removeEventListener("pointermove", onMove);
     document.removeEventListener("pointerup", onUp);
     document.removeEventListener("keydown", onKey);
@@ -432,11 +489,12 @@ function showGame(root: HTMLElement, settings: Settings, position: Position): vo
 
   quitButton.addEventListener("click", () => {
     cleanup();
-    showSettings(root, settings);
+    showSettings(root, { ...settings, seed: nextSeed });
   });
 
   scoreForm.addEventListener("submit", (e) => {
     e.preventDefault();
+    if (!session.started) return;
     const result = session.complete({ [BLACK]: Number(blackInput.value), [WHITE]: Number(whiteInput.value) });
     if (result.ok) {
       finish();
@@ -461,8 +519,8 @@ function showGame(root: HTMLElement, settings: Settings, position: Position): vo
     if (isBest) saveBest(settings.size, time);
     const again = h("button", { class: "primary" }, ["もう一度"]);
     const back = h("button", {}, ["設定に戻る"]);
-    again.addEventListener("click", () => void prepareGame(root, settings));
-    back.addEventListener("click", () => showSettings(root, settings));
+    again.addEventListener("click", () => void prepareGame(root, { ...settings, seed: nextSeed }));
+    back.addEventListener("click", () => showSettings(root, { ...settings, seed: nextSeed }));
     for (const input of [blackInput, whiteInput]) input.disabled = true;
     scoreForm.querySelector(".buttons")!.remove();
     colorPicker.hidden = true;
@@ -475,6 +533,30 @@ function showGame(root: HTMLElement, settings: Settings, position: Position): vo
   };
 
   render();
+
+  // カウントダウン: 3, 2, 1 の後に「スタート！」で開始
+  let count = 3;
+  const showCount = () => {
+    countdownNumber.textContent = String(count);
+    countdownNumber.classList.remove("pop");
+    void countdownNumber.offsetWidth;
+    countdownNumber.classList.add("pop");
+  };
+  showCount();
+  const countdownTimer = window.setInterval(() => {
+    count--;
+    if (count > 0) {
+      showCount();
+      return;
+    }
+    window.clearInterval(countdownTimer);
+    session.begin();
+    updateTimer();
+    countdown.classList.add("go");
+    countdownNumber.textContent = "スタート！";
+    window.setTimeout(() => countdown.remove(), 700);
+  }, 1000);
+  cleanups.push(() => window.clearInterval(countdownTimer));
 }
 
 /** 設定項目のラジオボタン群。 */
@@ -539,9 +621,10 @@ function formatTime(ms: number): string {
 }
 
 function loadSettings(): Settings {
-  const fallback: Settings = { size: 19, undoOnPenalty: true, replay: false };
+  const fallback: Settings = { size: 19, undoOnPenalty: true, replay: false, seed: randomSeed() };
   try {
-    return { ...fallback, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "{}") };
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "{}");
+    return { ...fallback, ...saved, seed: fallback.seed };
   } catch {
     return fallback;
   }
@@ -549,7 +632,8 @@ function loadSettings(): Settings {
 
 function saveSettings(settings: Settings): void {
   try {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    const { seed: _seed, ...rest } = settings;
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(rest));
   } catch {
     // 保存できなくてもゲームは続けられる
   }

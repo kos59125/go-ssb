@@ -3,7 +3,8 @@ import type { GeneratedGame } from "./generate";
 import { MODEL_PATH, type SerializedGame, type WorkerRequest, type WorkerResponse } from "./protocol";
 
 /**
- * 終局図の生成を Web Worker で行い、盤サイズごとに 1 局ずつ先読みしておく。
+ * 終局図の生成を Web Worker で行う。盤サイズとシードの組ごとに先読みしておける。
+ * 同じ盤サイズとシードからは同じ終局図ができる。
  */
 export class GameGenerator {
   private worker: Worker | null = null;
@@ -12,30 +13,32 @@ export class GameGenerator {
     number,
     { resolve: (g: GeneratedGame) => void; reject: (e: Error) => void; onProgress?: (move: number) => void }
   >();
-  private readonly prefetched = new Map<number, { id: number; promise: Promise<GeneratedGame> }>();
+  private readonly prefetched = new Map<string, { id: number; promise: Promise<GeneratedGame> }>();
   /** take() で待っている依頼。中断しない。 */
   private readonly taking = new Set<number>();
 
-  /** 次のゲーム用に、裏で 1 局生成しておく。別のサイズの先読みは中断する。 */
-  prefetch(size: number): void {
+  /** 裏で 1 局生成しておく。ほかの先読みは中断する。 */
+  prefetch(size: number, seed: number): void {
+    const key = `${size}:${seed}`;
     for (const [other, entry] of this.prefetched) {
-      if (other === size || this.taking.has(entry.id)) continue;
+      if (other === key || this.taking.has(entry.id)) continue;
       this.worker?.postMessage({ type: "cancel", id: entry.id } satisfies WorkerRequest);
       this.prefetched.delete(other);
     }
-    if (this.prefetched.has(size)) return;
+    if (this.prefetched.has(key)) return;
     const id = this.nextId++;
-    const promise = this.request(id, size);
+    const promise = this.request(id, size, seed);
     promise.catch(() => {
-      if (this.prefetched.get(size)?.id === id) this.prefetched.delete(size);
+      if (this.prefetched.get(key)?.id === id) this.prefetched.delete(key);
     });
-    this.prefetched.set(size, { id, promise });
+    this.prefetched.set(key, { id, promise });
   }
 
-  /** 生成済み（または生成中）の 1 局を受け取り、次の 1 局の先読みを始める。 */
-  async take(size: number, onProgress?: (move: number) => void): Promise<GeneratedGame> {
-    this.prefetch(size);
-    const entry = this.prefetched.get(size)!;
+  /** 生成済み（または生成中）の 1 局を受け取る。 */
+  async take(size: number, seed: number, onProgress?: (move: number) => void): Promise<GeneratedGame> {
+    const key = `${size}:${seed}`;
+    this.prefetch(size, seed);
+    const entry = this.prefetched.get(key)!;
     const listener = this.pending.get(entry.id);
     if (listener) listener.onProgress = onProgress;
     this.taking.add(entry.id);
@@ -43,17 +46,16 @@ export class GameGenerator {
       return await entry.promise;
     } finally {
       this.taking.delete(entry.id);
-      this.prefetched.delete(size);
-      this.prefetch(size);
+      this.prefetched.delete(key);
     }
   }
 
-  private request(id: number, size: number): Promise<GeneratedGame> {
+  private request(id: number, size: number, seed: number): Promise<GeneratedGame> {
     const worker = this.ensureWorker();
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       const modelUrl = new URL(`${import.meta.env.BASE_URL}${MODEL_PATH}`, document.baseURI).href;
-      worker.postMessage({ type: "generate", id, size, modelUrl } satisfies WorkerRequest);
+      worker.postMessage({ type: "generate", id, size, seed, modelUrl } satisfies WorkerRequest);
     });
   }
 

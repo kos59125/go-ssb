@@ -68,6 +68,16 @@ export class BoardView {
     this.overlay.append(el("rect", { x: left, y: top, width, height, class: "selection" }));
   }
 
+  /** 点の中心と石の半径（盤の SVG 要素の左上からのピクセル）。演出の位置合わせに使う。 */
+  pointBox(i: number): { x: number; y: number; r: number } {
+    const rect = this.svg.getBoundingClientRect();
+    const extent = MARGIN * 2 + CELL * (this.size - 1);
+    const scale = rect.width / extent;
+    const x = i % this.size;
+    const y = Math.floor(i / this.size);
+    return { x: (MARGIN + x * CELL) * scale, y: (MARGIN + y * CELL) * scale, r: CELL * 0.47 * scale };
+  }
+
   /** 画面座標に最も近い点。盤の外なら null。 */
   pointAt(clientX: number, clientY: number): number | null {
     const rect = this.svg.getBoundingClientRect();
