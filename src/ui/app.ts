@@ -621,8 +621,13 @@ function showGame(
   };
 
   /** 持っている石を 1 個置く。置けなかった理由を伝える。 */
+  const sekiNotice = () => notice("セキの石や、セキの中の点には触れられません（ペナルティ +5 秒）。");
   const place = (i: number, color: Color) => {
     if (session.placeAt(i, color)) return;
+    if (session.match.sekiPoints.has(i)) {
+      sekiNotice();
+      return;
+    }
     if (session.phase === "removal") {
       session.cancel();
       notice("死に石取りの間は、盤上で石を動かせません。死に石をアゲハマトレイに移すと整地に進めます。");
@@ -658,6 +663,7 @@ function showGame(
   };
 
   const pickUp = (points: number[]) => {
+    if (points.some((i) => session.match.sekiPoints.has(i) && session.board.cells[i] !== EMPTY)) sekiNotice();
     if (session.handRoom <= 0 && points.some((i) => session.board.cells[i] !== EMPTY)) {
       notice(`一度に持てる石は ${session.handLimit} 個までです。`);
       return;
@@ -702,7 +708,8 @@ function showGame(
     drag.swiping = true;
     for (const i of path) {
       if (!session.hand) break;
-      if (session.board.cells[i] === EMPTY) session.placeAt(i, color);
+      // セキの中の点はなぞっても置かない（触れたことにしない）
+      if (session.board.cells[i] === EMPTY && !session.match.sekiPoints.has(i)) session.placeAt(i, color);
     }
     drag.last = to;
     penaltyCheck(before);
@@ -749,6 +756,7 @@ function showGame(
         // 死に石取りの間は、クリックした石をそのままアゲハマトレイへ
         if (session.board.cells[i] !== EMPTY) {
           if (session.phase === "removal") {
+            if (session.match.sekiPoints.has(i)) sekiNotice();
             if (!session.capture(i) && cpuMode && session.board.cells[i] === myColor) {
               notice(`死に石取りで取るのは、自分の地の中の${colorName(cpuColor)}の死に石です。`);
             }

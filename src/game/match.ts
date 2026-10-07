@@ -95,6 +95,8 @@ export class Match {
   readonly initial: Position;
   /** 開始時の中立の空点（セキ）。 */
   private readonly baseOpenPoints = new Set<number>();
+  /** セキの点（セキの石・境界の石・中の空点）。触れるとペナルティ（仕様書 §2.8）。 */
+  readonly sekiPoints: Set<number>;
   /** 最後に境界が閉じていた時点の目数。 */
   settledScores!: Record<Color, number>;
   /** 最後に境界が閉じていた時点で、各点がどちらの地だったか（地でなければ EMPTY）。 */
@@ -107,7 +109,9 @@ export class Match {
     this.initial = { board: position.board.clone(), trays: { ...position.trays } };
     this.options = options;
     this.initialScores = this.scores();
-    for (const region of analyze(this.board).regions) {
+    const initial = analyze(this.board);
+    this.sekiPoints = initial.seki;
+    for (const region of initial.regions) {
       if (region.owner !== null) continue;
       for (const i of region.points) if (this.board.cells[i] === EMPTY) this.baseOpenPoints.add(i);
     }
@@ -381,7 +385,11 @@ export class Player {
    */
   pickUp(points: number[]): boolean {
     if (this.phase === "finished") return false;
-    const stones = points.filter((i) => this.canPick(i)).slice(0, Math.max(0, this.handRoom));
+    const pickable = points.filter((i) => this.canPick(i));
+    // セキの石には触れない: 持とうとしたらペナルティにして、その石は持たない
+    const seki = pickable.filter((i) => this.match.sekiPoints.has(i));
+    if (seki.length > 0) this.touchSeki(seki.map((i) => ({ point: i, color: this.board.cells[i] as Color })));
+    const stones = pickable.filter((i) => !this.match.sekiPoints.has(i)).slice(0, Math.max(0, this.handRoom));
     if (stones.length === 0) return false;
     const hand = this.ensureHand();
     for (const i of stones) {
@@ -462,6 +470,12 @@ export class Player {
   placeAt(i: number, color?: Color): boolean {
     const hand = this.hand;
     if (!hand || this.phase !== "arrange" || !this.canPlace(i)) return false;
+    if (this.match.sekiPoints.has(i)) {
+      // セキの中（共有の呼吸点・セキの眼）には置けない: ペナルティにして、石は持ったまま
+      const stone = hand.stones.find((s) => color === undefined || s.color === color) ?? hand.stones[0];
+      this.touchSeki([{ point: i, color: stone.color }]);
+      return false;
+    }
     const own = hand.stones.findIndex(
       (s) => s.source.kind === "board" && s.source.point === i && (color === undefined || s.color === color),
     );
@@ -655,6 +669,12 @@ export class Player {
     }
     this.updatePhase();
     if (!this.boundaryOpen) this.match.markSettled();
+  }
+
+  /** セキに触れようとした: ペナルティ（石は動かさない）。画面の演出用に rejected に入れる。 */
+  private touchSeki(points: { point: number; color: Color }[]): void {
+    this.penalties++;
+    this.rejected = points;
   }
 
   /** ペナルティを科し、設定に応じて自分の動かした石を元に戻すか、印を付ける。 */

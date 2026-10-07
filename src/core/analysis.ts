@@ -14,6 +14,11 @@ export interface Analysis {
   regions: Region[];
   /** 点インデックス → regions の添字。生きた石の点は -1。 */
   regionOf: Int32Array;
+  /**
+   * セキの点: セキの石（単独で生きていないグループ）、共有の呼吸点（中立の領域）とセキの石の眼、
+   * それらに接する生きた石（セキの境界の石）。整地では触れない（仕様書 §2.8）。
+   */
+  seki: Set<number>;
 }
 
 /** 盤面を領域に分割し、地とセキを判定する。 */
@@ -48,8 +53,8 @@ export function analyze(board: Board): Analysis {
     regions.push({ points, owner, territory: owner !== null });
   }
 
-  markSeki(board, regions, regionOf);
-  return { regions, regionOf };
+  const seki = markSeki(board, regions, regionOf);
+  return { regions, regionOf, seki };
 }
 
 /** これ以上の大きさの地を持つグループは、セキではなく単独で生きているとみなす。 */
@@ -67,21 +72,23 @@ const LARGE_EYE = 7;
  * 大きな地を持つ外側の石が共有の呼吸点に接していても、その地は数える。
  * ダメは開始時に埋めてあるので、中立の領域が残るのは基本的にセキだけである。
  */
-function markSeki(board: Board, regions: Region[], regionOf: Int32Array): void {
+function markSeki(board: Board, regions: Region[], regionOf: Int32Array): Set<number> {
   const total = board.size * board.size;
   const chainOf = new Int32Array(total).fill(-1);
-  const chains: { color: number; regions: Set<number>; touchesNeutral: boolean }[] = [];
+  const chains: { color: number; regions: Set<number>; touchesNeutral: boolean; stones: number[] }[] = [];
 
   for (let start = 0; start < total; start++) {
     if (!board.isLiveStone(start) || chainOf[start] !== -1) continue;
     const id = chains.length;
     const color = board.cells[start];
     const adjacent = new Set<number>();
+    const stones: number[] = [];
     let touchesNeutral = false;
     const stack = [start];
     chainOf[start] = id;
     while (stack.length > 0) {
       const i = stack.pop()!;
+      stones.push(i);
       for (const j of board.neighbors(i)) {
         if (board.isLiveStone(j)) {
           if (board.cells[j] === color && chainOf[j] === -1) {
@@ -95,7 +102,7 @@ function markSeki(board: Board, regions: Region[], regionOf: Int32Array): void {
         }
       }
     }
-    chains.push({ color, regions: adjacent, touchesNeutral });
+    chains.push({ color, regions: adjacent, touchesNeutral, stones });
   }
 
   // 同じ色の地を共有する連をまとめる（union-find）
@@ -111,21 +118,43 @@ function markSeki(board: Board, regions: Region[], regionOf: Int32Array): void {
     }
   });
 
-  const groups = new Map<number, { eyes: Set<number>; touchesNeutral: boolean }>();
+  const groups = new Map<number, { eyes: Set<number>; touchesNeutral: boolean; stones: number[] }>();
   chains.forEach((chain, k) => {
     const root = find(k);
-    const group = groups.get(root) ?? { eyes: new Set<number>(), touchesNeutral: false };
+    const group = groups.get(root) ?? { eyes: new Set<number>(), touchesNeutral: false, stones: [] };
     for (const r of chain.regions) if (regions[r].owner === chain.color) group.eyes.add(r);
     group.touchesNeutral ||= chain.touchesNeutral;
+    group.stones.push(...chain.stones);
     groups.set(root, group);
   });
 
+  const seki = new Set<number>();
+  const inner = new Set<number>();
   for (const group of groups.values()) {
     if (!group.touchesNeutral) continue;
     const independent = group.eyes.size >= 2 || [...group.eyes].some((r) => regions[r].points.length >= LARGE_EYE);
     if (independent) continue;
-    for (const r of group.eyes) regions[r].territory = false;
+    for (const r of group.eyes) {
+      regions[r].territory = false;
+      for (const i of regions[r].points) inner.add(i);
+    }
+    for (const i of group.stones) seki.add(i);
   }
+  if (seki.size === 0) return seki;
+  // 共有の呼吸点（セキの石が接する中立の領域）
+  for (const i of [...seki]) {
+    for (const j of board.neighbors(i)) {
+      if (board.isLiveStone(j)) continue;
+      const r = regions[regionOf[j]];
+      if (r.owner === null) for (const k of r.points) inner.add(k);
+    }
+  }
+  // セキの中の点と、それに接する生きた石（境界の石）
+  for (const i of inner) {
+    seki.add(i);
+    for (const j of board.neighbors(i)) if (board.isLiveStone(j)) seki.add(j);
+  }
+  return seki;
 }
 
 /** 盤上の石とアゲハマトレイの状態。 */
