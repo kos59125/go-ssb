@@ -382,6 +382,19 @@ button.primary {
   margin-top: 4px;
 }
 
+.seed-value {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+  font-variant-numeric: tabular-nums;
+}
+
+.copy-seed {
+  font-size: 12px;
+  padding: 1px 8px;
+  margin-left: 4px;
+}
+
 /* 開始のカウントダウン */
 .countdown {
   position: absolute;
@@ -776,4 +789,21 @@ body.holding .tray {
 
 .settings .lead.error {
   color: var(--accent);
+}
+
+/* トレイに並びきらないアゲハマの数（最後の石に重ねる） */
+.tray-more {
+  font-size: 9px;
+  font-weight: 700;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+}
+
+.tray-more.black {
+  fill: #fff;
+}
+
+.tray-more.white {
+  fill: #222;
 }

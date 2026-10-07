@@ -11,7 +11,7 @@ import { planLayouts, SerializedLayout } from "../game/layout";
 import { Match, Player } from "../game/match";
 import { PENALTY_MS, Session } from "../game/session";
 import { BoardView } from "./boardView";
-import { TrayView } from "./trayView";
+import { TRAY_SLOTS, TrayView } from "./trayView";
 
 interface Settings {
   /** ひとりで / vs CPU（仕様書 §3）。 */
@@ -449,7 +449,7 @@ function showGame(
         message,
         scoreForm,
         resultBox,
-        h("p", { class: "note seed-note" }, [settings.record ? `棋譜: ${recordLabel(settings.record)}` : `シード: ${settings.seed}`]),
+        settings.record ? h("p", { class: "note seed-note" }, [`棋譜: ${recordLabel(settings.record)}`]) : seedNote(settings.seed),
       ]),
     ]),
     ghost,
@@ -657,8 +657,10 @@ function showGame(
         if (n > 0) pickFromTray(owner, n);
       } else if (tray === owner) {
         // 石をクリックすると持つ（死に石取りの間は持っている石を入れる）。空いた所なら持っている石を入れる
+        // トレイがいっぱい（空いたマスがない）ときに石を持っていれば、クリックで入れる
         const onStone = start >= 0 && start < count;
-        if (onStone && !(session.phase === "removal" && session.hand)) pickFromTray(owner, 1);
+        const full = count >= TRAY_SLOTS;
+        if (onStone && !(session.hand && (session.phase === "removal" || full))) pickFromTray(owner, 1);
         else dropToTray(owner);
       } else if (tray !== null) {
         dropToTray(tray);
@@ -1161,6 +1163,27 @@ function saveBest(size: number, ms: number): void {
   } catch {
     // 保存できなくてもゲームは続けられる
   }
+}
+
+/** ゲーム画面のシードの表示。文字を選択でき、ボタンでコピーできる。 */
+function seedNote(seed: string): HTMLElement {
+  const copy = h("button", { type: "button", class: "copy-seed", title: "シードをコピー" }, ["コピー"]);
+  copy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(seed);
+      copy.textContent = "コピーしました";
+    } catch {
+      // クリップボードが使えないときは、文字を選択した状態にする
+      const range = document.createRange();
+      range.selectNodeContents(value);
+      window.getSelection()?.removeAllRanges();
+      window.getSelection()?.addRange(range);
+      copy.textContent = "選択しました";
+    }
+    window.setTimeout(() => (copy.textContent = "コピー"), 1500);
+  });
+  const value = h("span", { class: "seed-value" }, [seed]);
+  return h("p", { class: "note seed-note" }, ["シード: ", value, " ", copy]);
 }
 
 function h<K extends keyof HTMLElementTagNameMap>(

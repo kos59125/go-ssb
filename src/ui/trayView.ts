@@ -3,12 +3,17 @@ import { Color, WHITE } from "../core/board";
 const COLUMNS = 10;
 const CELL = 22;
 const PAD = 4;
-const MIN_ROWS = 2;
+/** トレイの行数。アゲハマの増減で表示がずれないよう、大きさは固定する。 */
+const ROWS = 3;
+/** 並べて見せる石の数。これを超えた分は、最後の石に「+N」と書いて示す。 */
+const SLOTS = COLUMNS * ROWS;
+export const TRAY_SLOTS = SLOTS;
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 /**
  * アゲハマトレイ。アゲハマを 1 個ずつ石として並べて表示する。
  * 石は左上から詰めて並べ、マス目の位置で盤上と同じようにクリック・範囲選択できる。
+ * 大きさは固定で、並びきらない分は最後の石に「+N」（さらに N 個）と書いて示す。
  */
 export class TrayView {
   readonly svg: SVGSVGElement;
@@ -17,7 +22,7 @@ export class TrayView {
   private readonly stoneColor: string;
   private readonly stones: SVGGElement;
   private readonly overlay: SVGGElement;
-  private rows = MIN_ROWS;
+  private readonly more: SVGTextElement;
 
   constructor(owner: Color, stoneColor: Color) {
     this.owner = owner;
@@ -26,17 +31,22 @@ export class TrayView {
     this.svg.classList.add("tray-stones");
     this.stones = document.createElementNS(SVG_NS, "g");
     this.overlay = document.createElementNS(SVG_NS, "g");
-    this.svg.append(this.stones, this.overlay);
+    this.more = document.createElementNS(SVG_NS, "text");
+    this.more.setAttribute("class", `tray-more ${this.stoneColor}`);
+    this.more.setAttribute("x", String(PAD + (COLUMNS - 1) * CELL + CELL / 2));
+    this.more.setAttribute("y", String(PAD + (ROWS - 1) * CELL + CELL / 2));
+    this.svg.append(this.stones, this.more, this.overlay);
+    const width = PAD * 2 + COLUMNS * CELL;
+    const height = PAD * 2 + ROWS * CELL;
+    this.svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    this.svg.style.aspectRatio = `${width} / ${height}`;
   }
 
   render(count: number): void {
-    this.rows = Math.max(MIN_ROWS, Math.ceil((count + 1) / COLUMNS));
-    const width = PAD * 2 + COLUMNS * CELL;
-    const height = PAD * 2 + this.rows * CELL;
-    this.svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-    this.svg.style.aspectRatio = `${width} / ${height}`;
     this.stones.replaceChildren();
-    for (let k = 0; k < count; k++) {
+    const overflow = count - SLOTS;
+    this.more.textContent = overflow > 0 ? `+${overflow}` : "";
+    for (let k = 0; k < Math.min(count, SLOTS); k++) {
       const circle = document.createElementNS(SVG_NS, "circle");
       circle.setAttribute("cx", String(PAD + (k % COLUMNS) * CELL + CELL / 2));
       circle.setAttribute("cy", String(PAD + Math.floor(k / COLUMNS) * CELL + CELL / 2));
@@ -52,7 +62,7 @@ export class TrayView {
     const scale = (PAD * 2 + COLUMNS * CELL) / rect.width;
     const x = Math.floor(((clientX - rect.left) * scale - PAD) / CELL);
     const y = Math.floor(((clientY - rect.top) * scale - PAD) / CELL);
-    if (x < 0 || y < 0 || x >= COLUMNS || y >= this.rows) return null;
+    if (x < 0 || y < 0 || x >= COLUMNS || y >= ROWS) return null;
     return y * COLUMNS + x;
   }
 
@@ -60,7 +70,7 @@ export class TrayView {
   countInRect(a: number, b: number, count: number): number {
     const [x1, y1, x2, y2] = [a % COLUMNS, Math.floor(a / COLUMNS), b % COLUMNS, Math.floor(b / COLUMNS)];
     let n = 0;
-    for (let k = 0; k < count; k++) {
+    for (let k = 0; k < Math.min(count, SLOTS); k++) {
       const x = k % COLUMNS;
       const y = Math.floor(k / COLUMNS);
       if (x >= Math.min(x1, x2) && x <= Math.max(x1, x2) && y >= Math.min(y1, y2) && y <= Math.max(y1, y2)) n++;
