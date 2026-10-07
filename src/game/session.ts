@@ -6,17 +6,21 @@ export const PENALTY_MS = 5000;
 
 export type Phase = "removal" | "arrange" | "finished";
 
+/** 持っている石の出どころ。持つのをやめたときはここへ戻す。 */
+export type Source = { kind: "board"; point: number } | { kind: "tray"; owner: Color };
+
 /** プレイヤーが持っている石。 */
 export interface HeldStone {
   color: Color;
   dead: boolean;
+  source: Source;
 }
 
-export type Origin = { kind: "board"; points: number[] } | { kind: "tray"; owner: Color };
-
 export interface Hand {
+  /** 持った順。 */
   stones: HeldStone[];
-  origin: Origin;
+  /** 盤上で石を持ち上げた点（印と「元の位置」の判定に使う）。 */
+  origins: number[];
   /** この手で石を置いた点。 */
   placed: number[];
   /** 印の付いた石を持ったか。 */
@@ -99,83 +103,90 @@ export class Session {
 
   /**
    * 盤上の石を持つ。points は持つ順番に並べる。
-   * 盤上から持っている最中なら、持っている石に追加する（持った順番の最後に並ぶ）。
+   * 石を持っている最中なら、持っている石に追加する（持った順番の最後に並ぶ）。
    */
   pickUp(points: number[]): boolean {
     if (this.phase === "finished") return false;
-    const hand = this.hand;
-    if (hand && hand.origin.kind !== "board") return false;
     const stones = points.filter((i) => this.board.cells[i] !== EMPTY);
     if (stones.length === 0) return false;
-    const before = hand?.before ?? this.snapshot();
-    const carriedMark = stones.some((i) => this.marks.has(i));
-    const held = stones.map((i) => {
-      const stone: HeldStone = { color: this.board.cells[i] as Color, dead: this.board.dead[i] === 1 };
+    const hand = this.ensureHand();
+    for (const i of stones) {
+      hand.stones.push({
+        color: this.board.cells[i] as Color,
+        dead: this.board.dead[i] === 1,
+        source: { kind: "board", point: i },
+      });
+      hand.origins.push(i);
+      if (this.marks.delete(i)) hand.carriedMark = true;
       const { x, y } = this.board.point(i);
       this.board.set(x, y, EMPTY);
-      this.marks.delete(i);
-      return stone;
-    });
-    if (hand && hand.origin.kind === "board") {
-      hand.stones.push(...held);
-      hand.origin.points.push(...stones);
-      hand.carriedMark ||= carriedMark;
-    } else {
-      this.hand = { stones: held, origin: { kind: "board", points: stones }, placed: [], carriedMark, before };
     }
     return true;
   }
 
-  /** アゲハマトレイから石を 1 つ持つ。同じトレイから持っている最中なら 1 つ追加する。 */
-  pickFromTray(owner: Color): boolean {
-    if (this.phase !== "arrange" || this.position.trays[owner] === 0) return false;
-    if (this.hand) {
-      const { origin } = this.hand;
-      if (origin.kind !== "tray" || origin.owner !== owner) return false;
-    } else {
-      this.hand = { stones: [], origin: { kind: "tray", owner }, placed: [], carriedMark: false, before: this.snapshot() };
+  /** アゲハマトレイから石を count 個持つ。石を持っている最中なら追加する。 */
+  pickFromTray(owner: Color, count = 1): boolean {
+    const n = Math.min(count, this.position.trays[owner]);
+    if (this.phase !== "arrange" || n <= 0) return false;
+    const hand = this.ensureHand();
+    this.position.trays[owner] -= n;
+    for (let k = 0; k < n; k++) {
+      hand.stones.push({ color: opponent(owner), dead: false, source: { kind: "tray", owner } });
     }
-    this.position.trays[owner]--;
-    this.hand.stones.push({ color: opponent(owner), dead: false });
     return true;
   }
 
-  /** 持っている石を元の場所に戻す。 */
+  /** 持っている石を、それぞれ持ち出した場所に戻す。 */
   cancel(): void {
     const hand = this.hand;
     if (!hand) return;
-    if (hand.origin.kind === "tray") {
-      this.position.trays[hand.origin.owner] += hand.stones.length;
-    } else {
-      const free = hand.origin.points.filter((i) => this.board.cells[i] === EMPTY);
-      hand.stones.forEach((stone, k) => {
-        const i = free[k];
-        if (i === undefined) return;
-        const { x, y } = this.board.point(i);
-        this.board.set(x, y, stone.color, stone.dead);
-      });
+    const left: HeldStone[] = [];
+    for (const stone of hand.stones) {
+      const { source } = stone;
+      if (source.kind === "tray") {
+        this.position.trays[source.owner]++;
+        continue;
+      }
+      // 元の点が埋まっていたら、空いている別の元の点に戻す
+      const point = this.board.cells[source.point] === EMPTY
+        ? source.point
+        : hand.origins.find((i) => this.board.cells[i] === EMPTY);
+      if (point === undefined) {
+        left.push(stone);
+        continue;
+      }
+      const { x, y } = this.board.point(point);
+      this.board.set(x, y, stone.color, stone.dead);
     }
+    hand.stones = left;
+    if (left.length > 0) return;
     this.hand = null;
     if (hand.placed.length > 0) this.settle(hand);
   }
 
-  /** 元の位置の再クリックか（持つのをやめる操作）。 */
-  isOrigin(i: number): boolean {
-    const origin = this.hand?.origin;
-    return origin?.kind === "board" && origin.points.includes(i) && this.board.cells[i] === EMPTY;
+  /** 持っている石の色。 */
+  heldColors(): Set<Color> {
+    return new Set(this.hand?.stones.map((s) => s.color) ?? []);
   }
 
-  /** 持っている石のうち、最初に持った 1 個をクリックした空点に置く。残りは持ったまま。 */
-  placeAt(i: number): boolean {
+  /**
+   * 持っている石を 1 個、クリックした空点に置く。残りは持ったまま。置く石は次の順で選ぶ。
+   * 1. その点から持ち上げた石（color を指定したときはその色の場合だけ）。元の位置に戻すのと同じ
+   * 2. color の石のうち最初に持った石
+   * 3. 最初に持った石
+   */
+  placeAt(i: number, color?: Color): boolean {
     const hand = this.hand;
     if (!hand || this.phase !== "arrange" || this.board.cells[i] !== EMPTY) return false;
-    // 石は 1 個ずつ、持った順に置く
-    const [stone, ...remaining] = hand.stones;
+    const own = hand.stones.findIndex(
+      (s) => s.source.kind === "board" && s.source.point === i && (color === undefined || s.color === color),
+    );
+    const k = own >= 0 ? own : Math.max(0, hand.stones.findIndex((s) => s.color === color));
+    const [stone] = hand.stones.splice(k, 1);
     const { x, y } = this.board.point(i);
     this.board.set(x, y, stone.color, stone.dead);
     hand.placed.push(i);
-    hand.stones = remaining;
-    if (remaining.length === 0) {
+    if (hand.stones.length === 0) {
       this.hand = null;
       this.settle(hand);
     }
@@ -237,7 +248,7 @@ export class Session {
    *   境界の石を動かしても、目数が変わらなければペナルティにしない。
    */
   private settle(hand: Hand): void {
-    const origins = hand.origin.kind === "board" ? hand.origin.points : [];
+    const origins = hand.origins;
     if (this.phase === "removal") {
       this.settleRemoval(hand);
       return;
@@ -310,6 +321,11 @@ export class Session {
    */
   private placedInEnemyTerritory(placed: number[]): boolean {
     return placed.some((i) => this.settledOwner[i] === opponent(this.board.cells[i] as Color));
+  }
+
+  private ensureHand(): Hand {
+    this.hand ??= { stones: [], origins: [], placed: [], carriedMark: false, before: this.snapshot() };
+    return this.hand;
   }
 
   private updatePhase(): void {

@@ -2,10 +2,11 @@ import { GameGenerator } from "../ai/client";
 import { GeneratedGame } from "../ai/generate";
 import { GoGame } from "../ai/go";
 import { Position } from "../core/analysis";
-import { BLACK, Board, Color, EMPTY, WHITE } from "../core/board";
+import { BLACK, Board, Color, EMPTY, WHITE, opponent } from "../core/board";
 import { dummyPosition } from "../game/dummy";
 import { PENALTY_MS, Session } from "../game/session";
 import { BoardView } from "./boardView";
+import { TrayView } from "./trayView";
 
 interface Settings {
   size: number;
@@ -146,13 +147,13 @@ function replayGame(root: HTMLElement, game: GeneratedGame): Promise<void> {
 }
 
 /**
- * ドラッグ中の状態。
- * - press: 盤上で押した。離したときにクリック・範囲選択・ドロップのどれかとして扱う
- * - carry: トレイの「持つ」ボタンから持ち出した
+ * 押してから離すまでの状態。離したときにクリック・範囲選択・ドロップのどれかとして扱う。
+ * - board: 盤上で押した。dropping は「石を持って空点から引っ張った」（離した点に置く）
+ * - tray: アゲハマトレイで押した
  */
 type Drag =
-  | { kind: "press"; start: number; current: number; dropping: boolean }
-  | { kind: "carry" }
+  | { kind: "board"; start: number; current: number; dropping: boolean; button: number }
+  | { kind: "tray"; owner: Color; start: number; current: number; button: number }
   | null;
 
 function showGame(root: HTMLElement, settings: Settings, position: Position): void {
@@ -171,6 +172,18 @@ function showGame(root: HTMLElement, settings: Settings, position: Position): vo
   const completeButton = h("button", { class: "primary" }, ["完了"]);
   const quitButton = h("button", {}, ["やめる"]);
 
+  // 左クリック（タップ）で置く石の色。右クリックでは反対の色を置く
+  let primaryColor: Color = BLACK;
+  const colorPicker = radioGroup("置く石（右クリックは反対の色）", "place-color", [
+    { value: "black", label: "黒", checked: true },
+    { value: "white", label: "白", checked: false },
+  ]);
+  colorPicker.classList.add("compact");
+  colorPicker.addEventListener("change", (e) => {
+    primaryColor = (e.target as HTMLInputElement).value === "white" ? WHITE : BLACK;
+  });
+  const colorFor = (button: number): Color => (button === 2 ? opponent(primaryColor) : primaryColor);
+
   root.replaceChildren(
     h("main", { class: "game" }, [
       h("div", { class: "board-wrap" }, [view.svg, toast]),
@@ -179,6 +192,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position): vo
         timer,
         penaltyLabel,
         openLabel,
+        colorPicker,
         trays[WHITE].root,
         trays[BLACK].root,
         message,
@@ -206,15 +220,8 @@ function showGame(root: HTMLElement, settings: Settings, position: Position): vo
     toastTimer = window.setTimeout(() => toast.classList.remove("visible"), 3500);
   };
 
-  /** 死に石取りの間に盤上へ置こうとしたとき: 石を元に戻して理由を伝える。 */
-  const rejectBoardPlacement = () => {
-    session.cancel();
-    notice("死に石取りの間は、盤上で石を動かせません。死に石をアゲハマトレイに移すと整地に進めます。");
-  };
-
   const render = () => {
-    const origin = session.hand?.origin;
-    view.render(session.board, session.marks, origin?.kind === "board" ? origin.points : []);
+    view.render(session.board, session.marks, session.hand?.origins ?? []);
     phaseLabel.textContent =
       session.phase === "removal"
         ? `① 死に石取り：死に石をアゲハマトレイへ（残り ${countDeadStones(session)} 個）`
@@ -223,7 +230,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position): vo
     openLabel.textContent = session.phase === "arrange" && session.boundaryOpen ? "境界が開いています（閉じた時点で目数を判定します）" : "";
     for (const color of [BLACK, WHITE] as const) {
       trays[color].count.textContent = `${session.position.trays[color]} 個`;
-      trays[color].root.classList.toggle("disabled", session.phase === "removal" && !session.hand);
+      trays[color].view.render(session.position.trays[color]);
     }
     renderGhost();
   };
@@ -243,62 +250,106 @@ function showGame(root: HTMLElement, settings: Settings, position: Position): vo
     if (session.penalties > before) flash(`ペナルティ！ +${PENALTY_MS / 1000} 秒`);
   };
 
-  // --- 盤の操作 ---
-  const place = (i: number) => {
-    if (!session.placeAt(i) && session.phase === "removal") rejectBoardPlacement();
+  /** 持っている石を 1 個置く。死に石取りの間は置けないので、石を元に戻して理由を伝える。 */
+  const place = (i: number, color: Color) => {
+    if (session.placeAt(i, color) || session.phase !== "removal") return;
+    session.cancel();
+    notice("死に石取りの間は、盤上で石を動かせません。死に石をアゲハマトレイに移すと整地に進めます。");
   };
 
-  /** クリック（押した点で離した）。 */
-  const click = (i: number) => {
-    if (session.hand && session.isOrigin(i)) session.cancel();
-    else if (session.board.cells[i] === EMPTY) {
-      if (session.hand) place(i);
-    } else if (!session.pickUp([i]) && session.hand?.origin.kind === "tray") {
-      notice("アゲハマを持っている間は、盤上の石を追加で持てません。");
+  const pickFromTray = (owner: Color, count: number) => {
+    if (session.phase === "removal") {
+      notice("死に石をすべて取り上げると、アゲハマを持てます。");
+      return;
+    }
+    session.pickFromTray(owner, count);
+  };
+
+  const dropToTray = (owner: Color) => {
+    if (session.hand && !session.dropToTray(owner)) {
+      notice(owner === BLACK ? "黒のアゲハマには白石だけが入ります。" : "白のアゲハマには黒石だけが入ります。");
     }
   };
 
+  // --- 押す ---
   view.svg.addEventListener("pointerdown", (e) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 && e.button !== 2) return;
     const i = view.pointAt(e.clientX, e.clientY);
     if (i === null) return;
     pointer = { x: e.clientX, y: e.clientY };
-    // 石を持って空点から引っ張ったら、離した点に置く（ドロップ）。それ以外は範囲選択
     const dropping = session.hand !== null && session.board.cells[i] === EMPTY;
-    drag = { kind: "press", start: i, current: i, dropping };
+    drag = { kind: "board", start: i, current: i, dropping, button: e.button };
     e.preventDefault();
   });
 
+  for (const owner of [BLACK, WHITE] as const) {
+    const tray = trays[owner];
+    tray.root.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 && e.button !== 2) return;
+      pointer = { x: e.clientX, y: e.clientY };
+      const cell = tray.view.cellAt(e.clientX, e.clientY) ?? -1;
+      drag = { kind: "tray", owner, start: cell, current: cell, button: e.button };
+      e.preventDefault();
+    });
+  }
+
+  // --- 動かす ---
   const onMove = (e: PointerEvent) => {
     pointer = { x: e.clientX, y: e.clientY };
-    if (drag?.kind === "press") {
+    if (drag?.kind === "board") {
       const i = view.pointAt(e.clientX, e.clientY);
       if (i !== null) drag.current = i;
       if (!drag.dropping && drag.current !== drag.start) view.showSelection(drag.start, drag.current);
+    } else if (drag?.kind === "tray" && drag.start >= 0) {
+      const cell = trays[drag.owner].view.cellAt(e.clientX, e.clientY);
+      if (cell !== null) drag.current = cell;
+      if (drag.current !== drag.start) trays[drag.owner].view.showSelection(drag.start, drag.current);
     }
     renderGhost();
   };
 
+  // --- 離す ---
   const onUp = (e: PointerEvent) => {
     if (!drag) return;
     const before = session.penalties;
     const tray = trayUnder(e.clientX, e.clientY);
     const i = view.pointAt(e.clientX, e.clientY);
-    if (drag.kind === "press" && !drag.dropping && drag.current !== drag.start) {
-      // 範囲選択（押した点が空点でも石でもよい）。持っている石に追加する
+    const color = colorFor(drag.button);
+
+    if (drag.kind === "board") {
       view.showSelection(null, null);
-      const points = pointsInRect(settings.size, drag.start, drag.current);
-      if (!session.pickUp(points) && session.hand?.origin.kind === "tray") {
-        notice("アゲハマを持っている間は、盤上の石を追加で持てません。");
+      if (!drag.dropping && drag.current !== drag.start) {
+        // 範囲選択（押した点が空点でも石でもよい）。持っている石に追加する
+        session.pickUp(pointsInRect(settings.size, drag.start, drag.current));
+      } else if (i === drag.start) {
+        if (session.board.cells[i] !== EMPTY) session.pickUp([i]);
+        else if (session.hand) place(i, color);
+      } else if (tray !== null) {
+        dropToTray(tray);
+      } else if (i !== null && session.board.cells[i] === EMPTY && session.hand) {
+        place(i, color);
       }
-    } else if (drag.kind === "press" && i === drag.start) {
-      click(i);
-    } else if (tray !== null) {
-      const origin = session.hand?.origin;
-      // トレイの「持つ」ボタンを離しただけなら、持ったままにする
-      if (!(origin?.kind === "tray" && origin.owner === tray)) session.dropToTray(tray);
-    } else if (i !== null && session.board.cells[i] === EMPTY && session.hand) {
-      place(i);
+    } else {
+      const { owner, start } = drag;
+      const view = trays[owner].view;
+      const count = session.position.trays[owner];
+      view.showSelection(null, null);
+      if (tray === owner && start >= 0 && drag.current !== start) {
+        // トレイの中で範囲選択
+        const n = view.countInRect(start, drag.current, count);
+        if (n > 0) pickFromTray(owner, n);
+      } else if (tray === owner) {
+        // 石をクリックすると持つ（死に石取りの間は持っている石を入れる）。空いた所なら持っている石を入れる
+        const onStone = start >= 0 && start < count;
+        if (onStone && !(session.phase === "removal" && session.hand)) pickFromTray(owner, 1);
+        else dropToTray(owner);
+      } else if (tray !== null) {
+        dropToTray(tray);
+      } else if (i !== null && session.board.cells[i] === EMPTY && start >= 0 && start < count) {
+        // トレイの石を盤へドラッグ
+        pickFromTray(owner, 1);
+        if (session.hand) place(i, opponent(owner));
+      }
     }
     drag = null;
     penaltyCheck(before);
@@ -312,44 +363,18 @@ function showGame(root: HTMLElement, settings: Settings, position: Position): vo
     return null;
   };
 
-  // --- アゲハマトレイの操作 ---
-  for (const color of [BLACK, WHITE] as const) {
-    const tray = trays[color];
-    tray.root.addEventListener("pointerdown", (e) => {
-      if (e.button !== 0 || (e.target as HTMLElement).closest("button")) return;
-      const before = session.penalties;
-      if (session.hand) session.dropToTray(color);
-      penaltyCheck(before);
-      render();
-    });
-    for (const [button, n] of tray.takeButtons) {
-      button.addEventListener("pointerdown", (e) => {
-        if (e.button !== 0) return;
-        e.preventDefault();
-        if (session.phase === "removal") {
-          flash("死に石をすべて取り上げると、アゲハマを持てます");
-          return;
-        }
-        const count = n ?? session.position.trays[color];
-        for (let k = 0; k < count; k++) if (!session.pickFromTray(color)) break;
-        if (session.hand) drag = { kind: "carry" };
-        pointer = { x: e.clientX, y: e.clientY };
-        render();
-      });
-    }
-  }
-
   const onKey = (e: KeyboardEvent) => {
     if (e.key === "Escape") {
       session.cancel();
       render();
     }
   };
+  // 右クリックは「反対の色を置く」に使うので、盤とトレイの上ではメニューを出さない
   const onContextMenu = (e: MouseEvent) => {
-    if (!session.hand) return;
-    e.preventDefault();
-    session.cancel();
-    render();
+    const target = e.target as Node;
+    if (view.svg.contains(target) || trays[BLACK].root.contains(target) || trays[WHITE].root.contains(target)) {
+      e.preventDefault();
+    }
   };
 
   document.addEventListener("pointermove", onMove);
@@ -391,7 +416,6 @@ function showGame(root: HTMLElement, settings: Settings, position: Position): vo
   render();
 }
 
-/** まだトレイに移していない死に石の数（手に持っている分も含む）。 */
 /** 設定項目のラジオボタン群。 */
 function radioGroup(
   legend: string,
@@ -415,6 +439,7 @@ function radioGroup(
   ]);
 }
 
+/** まだトレイに移していない死に石の数（手に持っている分も含む）。 */
 function countDeadStones(session: Session): number {
   const onBoard = session.board.dead.reduce((n, d) => n + d, 0);
   return onBoard + (session.hand?.stones.filter((s) => s.dead).length ?? 0);
@@ -422,18 +447,18 @@ function countDeadStones(session: Session): number {
 
 function trayElement(owner: Color) {
   const name = owner === BLACK ? "黒のアゲハマ（白石）" : "白のアゲハマ（黒石）";
-  const stoneClass = owner === BLACK ? "white" : "black";
+  const stoneColor = opponent(owner);
   const count = h("span", { class: "tray-count" }, []);
-  const takeButtons: [HTMLButtonElement, number | null][] = [
-    [h("button", {}, ["1 個"]), 1],
-    [h("button", {}, ["5 個"]), 5],
-    [h("button", {}, ["全部"]), null],
-  ];
+  const view = new TrayView(owner, stoneColor);
   const root = h("div", { class: "tray" }, [
-    h("div", { class: "tray-title" }, [h("span", { class: `tray-stone ${stoneClass}` }, []), name, count]),
-    h("div", { class: "tray-buttons" }, ["持つ：", ...takeButtons.map(([b]) => b)]),
+    h("div", { class: "tray-title" }, [
+      h("span", { class: `tray-stone ${stoneColor === BLACK ? "black" : "white"}` }, []),
+      name,
+      count,
+    ]),
+    view.svg,
   ]);
-  return { root, count, takeButtons };
+  return { root, count, view };
 }
 
 /** 完了時の目数入力ダイアログ。キャンセルなら null。 */

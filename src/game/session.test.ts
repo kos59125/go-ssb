@@ -116,11 +116,30 @@ describe("Session", () => {
     expect(s.penalties).toBe(0);
   });
 
-  it("トレイから持っている最中は盤上の石を追加できない", () => {
-    const { s } = session(true, { [BLACK]: 1, [WHITE]: 0 });
+  it("アゲハマと盤上の石を混ぜて持て、やめるとそれぞれ元の場所に戻る", () => {
+    const { s } = session(true, { [BLACK]: 2, [WHITE]: 0 });
     removeDead(s);
-    s.pickFromTray(BLACK);
-    expect(s.pickUp([s.board.index(4, 0)])).toBe(false);
+    const trays = { ...s.position.trays };
+    expect(s.pickFromTray(BLACK, 2)).toBe(true);
+    expect(s.pickUp([s.board.index(4, 0)])).toBe(true);
+    expect(s.hand?.stones.map((x) => x.color)).toEqual([WHITE, WHITE, BLACK]);
+    s.cancel();
+    expect(s.hand).toBeNull();
+    expect(s.position.trays).toEqual(trays);
+    expect(s.board.get(4, 0)).toBe(BLACK);
+  });
+
+  it("色を指定して置ける（白黒の入れ替え）", () => {
+    const { s } = session();
+    removeDead(s);
+    const black = s.board.index(4, 2);
+    const white = s.board.index(5, 2);
+    s.pickUp([black, white]);
+    // 黒を指定して白の元の点に置き、残りの白を黒の元の点に置く（持っていない色を指定したら残りの石）
+    expect(s.placeAt(white, BLACK)).toBe(true);
+    expect(s.board.get(5, 2)).toBe(BLACK);
+    expect(s.placeAt(black, BLACK)).toBe(true);
+    expect(s.board.get(4, 2)).toBe(WHITE);
   });
 
   describe("境界の石を動かす", () => {
@@ -197,14 +216,18 @@ describe("Session", () => {
     });
   });
 
-  it("元の位置を再クリックすると持つのをやめる", () => {
+  it("元の位置に置くと、その点から持ち上げた石が戻る", () => {
     const { s } = session();
-    const i = s.board.index(2, 1);
-    s.pickUp([i]);
-    expect(s.isOrigin(i)).toBe(true);
-    s.cancel();
-    expect(s.hand).toBeNull();
-    expect(s.board.isDead(2, 1)).toBe(true);
+    removeDead(s);
+    const a = s.board.index(4, 0);
+    const b = s.board.index(5, 0);
+    s.pickUp([a, b]);
+    // 最初に持ったのは黒だが、白 (5,0) の元の位置には白が戻る
+    s.placeAt(b);
+    expect(s.board.get(5, 0)).toBe(WHITE);
+    s.placeAt(a);
+    expect(s.board.get(4, 0)).toBe(BLACK);
+    expect(s.penalties).toBe(0);
   });
 
   it("完了の判定とタイム", () => {

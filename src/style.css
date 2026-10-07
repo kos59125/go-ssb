@@ -192,14 +192,9 @@ button.primary {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px;
-  min-height: 80px;
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-
-.tray.disabled .tray-buttons {
-  opacity: 0.5;
 }
 
 .tray-title {
@@ -211,17 +206,6 @@ button.primary {
 .tray-count {
   margin-left: auto;
   font-weight: bold;
-}
-
-.tray-buttons {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 0.9em;
-}
-
-.tray-buttons button {
-  padding: 0.2em 0.6em;
 }
 
 .tray-stone,
@@ -325,4 +309,34 @@ dialog input {
 
 .toast.visible {
   opacity: 1;
+}
+
+.tray-stones {
+  width: 100%;
+  height: auto;
+  display: block;
+  background: var(--board);
+  border-radius: 6px;
+  touch-action: none;
+  cursor: pointer;
+}
+
+.tray-stones .stone.white {
+  fill: #fafafa;
+  stroke: #555;
+  stroke-width: 1;
+}
+
+.tray-stones .stone.black {
+  fill: #1c1c1c;
+}
+
+.radio-group.compact {
+  padding: 6px 10px;
+  font-size: 0.9em;
+}
+
+.radio-group.compact legend {
+  font-weight: normal;
+  color: var(--muted);
 }
