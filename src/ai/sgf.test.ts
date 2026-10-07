@@ -64,15 +64,11 @@ describe("置き碁とパス", () => {
     expect(buildFeatures(g, KOMI).global[5]).toBeCloseTo(8.5 / 20);
   });
 
-  it("棋譜から局面を作れる（置き石・パス後の着手を含む）", async () => {
+  it("ダメを詰めていない終局図はエラー（置き石・パス後の着手を含む棋譜でも読み込みまでは進む）", async () => {
     ort.env.wasm.numThreads = 1;
     const evaluate = await createEvaluator(ort, new Uint8Array(readFileSync(`public/${MODEL_PATH}`)), KOMI);
-    const game = await finishRecord(evaluate, parseSgf(SGF));
-    const { board } = game.position;
-    for (const p of [2 * 9 + 2, 6 * 9 + 6, 4 * 9 + 2, 6 * 9 + 4]) expect(board.cells[p]).toBe(BLACK);
-    for (const p of [2 * 9 + 4, 4 * 9 + 6, 2 * 9 + 6]) expect(board.cells[p]).toBe(WHITE);
-    expect(game.setup).toHaveLength(2);
-    expect(game.moves).toHaveLength(7);
+    // この棋譜は序盤で終わっているので、ダメ（両方の色に接する空点）がたくさん残っている
+    await expect(finishRecord(evaluate, parseSgf(SGF))).rejects.toThrow(/ダメが詰まっていません/);
   }, 60_000);
 });
 

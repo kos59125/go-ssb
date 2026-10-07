@@ -773,3 +773,7 @@ body.holding .tray {
     border-bottom-color: var(--fg);
   }
 }
+
+.settings .lead.error {
+  color: var(--accent);
+}

@@ -256,6 +256,13 @@ async function prepareGame(root: HTMLElement, settings: Settings): Promise<void>
       : await generator.take(settings.size, seed, forCpu, (move) => (status.textContent = `自動対局中… ${move} 手目`));
   } catch (err) {
     if (cancelled) return;
+    if (settings.record) {
+      // 棋譜の問題（ダメが詰まっていない等）は、仮の局面では代わりにならないので設定に戻ってもらう
+      status.textContent = `棋譜を読み込めませんでした: ${err instanceof Error ? err.message : err}`;
+      status.classList.add("error");
+      back.textContent = "設定に戻る";
+      return;
+    }
     status.textContent = `終局図を生成できませんでした（${err instanceof Error ? err.message : err}）。`;
     const fallback = h("button", { class: "primary" }, ["仮の局面で遊ぶ"]);
     fallback.addEventListener("click", () => {

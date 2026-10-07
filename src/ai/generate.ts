@@ -269,6 +269,12 @@ async function finish(evaluate: Evaluator, game: GoGame, options: FinishOptions)
 
   const board = new Board(size, game.cells.slice(), dead);
   const { fills: dameFills, unresolved } = fillDame(game, board, own);
+  // 実戦の棋譜は、ダメを詰めた終局図であることを求める（セキの共有の呼吸点は埋められないので数えない）
+  if (record && dameFills.length > 0) {
+    throw new Error(
+      `終局図のダメが詰まっていません（${dameFills.length} か所）。ダメを詰めた終局図の SGF を読み込んでください。`,
+    );
+  }
   // 埋めきれなかった中立の空点がセキにしては多い
   if (unresolved > 4 && reject("dame")) return null;
 
