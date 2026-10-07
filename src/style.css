@@ -54,11 +54,37 @@ button.primary {
   gap: 14px;
 }
 
-.settings label {
+.radio-group {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
   display: flex;
-  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+}
+
+.radio-group legend {
+  padding: 0 4px;
+  font-weight: bold;
+}
+
+.radio-group label {
+  display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.radio-group input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.radio-group label:has(input:disabled) {
+  color: var(--muted);
+  cursor: default;
 }
 
 .lead,

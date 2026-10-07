@@ -10,7 +10,7 @@ import { BoardView } from "./boardView";
 interface Settings {
   size: number;
   undoOnPenalty: boolean;
-  /** 開始時に棋譜を並べるか（仕様書 §5.1）。 */
+  /** 開始時に初手から棋譜を並べるか（仕様書 §5.1）。 */
   replay: boolean;
 }
 
@@ -41,48 +41,37 @@ function showSettings(root: HTMLElement, settings: Settings): void {
     h("main", { class: "settings" }, [
       h("h1", {}, ["囲碁スピード整地バトル"]),
       h("p", { class: "lead" }, ["ひとりで：黒地と白地を両方整地して、タイムを競います。"]),
-      h("label", {}, [
-        "盤のサイズ",
-        h(
-          "select",
-          { id: "size" },
-          [19, 13, 9].map((n) =>
-            h("option", { value: String(n), ...(n === settings.size ? { selected: "" } : {}), ...(small && n === 19 ? { disabled: "" } : {}) }, [
-              `${n} 路`,
-            ]),
-          ),
-        ),
+      radioGroup("盤のサイズ", "size", [
+        { value: "19", label: "19 路", checked: settings.size === 19, disabled: small },
+        { value: "13", label: "13 路", checked: settings.size === 13 },
+        { value: "9", label: "9 路", checked: settings.size === 9 },
       ]),
-      h("label", {}, [
-        "開始時の表示",
-        h("select", { id: "start" }, [
-          h("option", { value: "final", ...(!settings.replay ? { selected: "" } : {}) }, ["終局図から"]),
-          h("option", { value: "replay", ...(settings.replay ? { selected: "" } : {}) }, ["棋譜を並べてから（10 秒）"]),
-        ]),
+      radioGroup("開始時の表示", "start", [
+        { value: "final", label: "終局図から", checked: !settings.replay },
+        { value: "replay", label: "初手から並べる", checked: settings.replay },
       ]),
-      h("label", {}, [
-        "ペナルティ時の石",
-        h("select", { id: "undo" }, [
-          h("option", { value: "undo", ...(settings.undoOnPenalty ? { selected: "" } : {}) }, ["元に戻す"]),
-          h("option", { value: "keep", ...(!settings.undoOnPenalty ? { selected: "" } : {}) }, ["そのまま（印を付ける）"]),
-        ]),
+      radioGroup("ペナルティ時の石", "undo", [
+        { value: "undo", label: "元に戻す", checked: settings.undoOnPenalty },
+        { value: "keep", label: "そのまま（印を付ける）", checked: !settings.undoOnPenalty },
       ]),
       h("p", { class: "note" }, ["終局図は KataGo の自動対局でその場で作ります。初回はネットワーク（約 4 MB）を読み込みます。"]),
       h("button", { id: "start-button", class: "primary" }, ["スタート"]),
       h("p", { class: "links" }, [h("a", { href: "https://github.com/kos59125/go-ssb/blob/main/docs/rulebook.md", target: "_blank" }, ["ルールブック"])]),
     ]),
   );
-  const sizeSelect = root.querySelector<HTMLSelectElement>("#size")!;
+  const selected = (name: string) => root.querySelector<HTMLInputElement>(`input[name="${name}"]:checked`)!.value;
   // 設定を選んでいる間に、裏で終局図を作っておく
   if (!debugSeed()) generator.prefetch(settings.size);
-  sizeSelect.addEventListener("change", () => {
-    if (!debugSeed()) generator.prefetch(Number(sizeSelect.value));
-  });
+  for (const input of root.querySelectorAll<HTMLInputElement>('input[name="size"]')) {
+    input.addEventListener("change", () => {
+      if (!debugSeed()) generator.prefetch(Number(selected("size")));
+    });
+  }
   root.querySelector("#start-button")!.addEventListener("click", () => {
     const next: Settings = {
-      size: Number(sizeSelect.value),
-      undoOnPenalty: root.querySelector<HTMLSelectElement>("#undo")!.value === "undo",
-      replay: root.querySelector<HTMLSelectElement>("#start")!.value === "replay",
+      size: Number(selected("size")),
+      undoOnPenalty: selected("undo") === "undo",
+      replay: selected("start") === "replay",
     };
     saveSettings(next);
     void prepareGame(root, next);
@@ -403,6 +392,29 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, gam
 }
 
 /** まだトレイに移していない死に石の数（手に持っている分も含む）。 */
+/** 設定項目のラジオボタン群。 */
+function radioGroup(
+  legend: string,
+  name: string,
+  options: { value: string; label: string; checked: boolean; disabled?: boolean }[],
+): HTMLFieldSetElement {
+  return h("fieldset", { class: "radio-group" }, [
+    h("legend", {}, [legend]),
+    ...options.map((o) =>
+      h("label", {}, [
+        h("input", {
+          type: "radio",
+          name,
+          value: o.value,
+          ...(o.checked ? { checked: "" } : {}),
+          ...(o.disabled ? { disabled: "" } : {}),
+        }, []),
+        o.label,
+      ]),
+    ),
+  ]);
+}
+
 function countDeadStones(session: Session): number {
   const onBoard = session.board.dead.reduce((n, d) => n + d, 0);
   return onBoard + (session.hand?.stones.filter((s) => s.dead).length ?? 0);
