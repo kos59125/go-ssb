@@ -86,6 +86,27 @@ describe("Session", () => {
     expect(s.scores()).toEqual(s.initialScores);
   });
 
+  it("石を持っている最中に別の石を追加で持てる", () => {
+    const { s } = session();
+    const a = s.board.index(4, 0);
+    const b = s.board.index(4, 1);
+    expect(s.pickUp([a])).toBe(true);
+    expect(s.pickUp([b])).toBe(true);
+    expect(s.hand?.stones).toHaveLength(2);
+    // 元に戻すと両方戻る
+    s.cancel();
+    expect(s.board.get(4, 0)).toBe(BLACK);
+    expect(s.board.get(4, 1)).toBe(BLACK);
+    expect(s.penalties).toBe(0);
+  });
+
+  it("トレイから持っている最中は盤上の石を追加できない", () => {
+    const { s } = session(true, { [BLACK]: 1, [WHITE]: 0 });
+    removeDead(s);
+    s.pickFromTray(BLACK);
+    expect(s.pickUp([s.board.index(4, 0)])).toBe(false);
+  });
+
   it("元の位置を再クリックすると持つのをやめる", () => {
     const { s } = session();
     const i = s.board.index(2, 1);

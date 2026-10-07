@@ -276,3 +276,27 @@ dialog input {
     width: 100%;
   }
 }
+
+.board-wrap {
+  position: relative;
+}
+
+.toast {
+  position: absolute;
+  left: 50%;
+  top: 12px;
+  transform: translateX(-50%);
+  max-width: calc(100% - 32px);
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: rgb(43 38 32 / 0.92);
+  color: #fff;
+  font-size: 0.95em;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.toast.visible {
+  opacity: 1;
+}

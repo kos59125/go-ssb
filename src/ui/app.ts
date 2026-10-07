@@ -156,9 +156,14 @@ function replayGame(root: HTMLElement, game: GeneratedGame): Promise<void> {
   });
 }
 
+/**
+ * ドラッグ中の状態。
+ * - press: 盤上で押した。離したときにクリック・範囲選択・ドロップのどれかとして扱う
+ * - carry: トレイの「持つ」ボタンから持ち出した
+ */
 type Drag =
-  | { kind: "carry"; from: number | null }
-  | { kind: "select"; start: number; current: number }
+  | { kind: "press"; start: number; current: number; dropping: boolean }
+  | { kind: "carry" }
   | null;
 
 function showGame(root: HTMLElement, settings: Settings, position: Position, gameResult?: string): void {
@@ -169,6 +174,8 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, gam
   const timer = h("div", { class: "timer" }, []);
   const penaltyLabel = h("div", { class: "penalty" }, []);
   const message = h("div", { class: "message" }, []);
+  // 盤の上に出す目立つ案内（操作できなかった理由など）
+  const toast = h("div", { class: "toast" }, []);
   const ghost = h("div", { class: "ghost" }, []);
   const trays = { [BLACK]: trayElement(BLACK), [WHITE]: trayElement(WHITE) };
   const completeButton = h("button", { class: "primary" }, ["完了"]);
@@ -176,7 +183,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, gam
 
   root.replaceChildren(
     h("main", { class: "game" }, [
-      h("div", { class: "board-wrap" }, [view.svg]),
+      h("div", { class: "board-wrap" }, [view.svg, toast]),
       h("aside", { class: "panel" }, [
         phaseLabel,
         timer,
@@ -193,6 +200,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, gam
   let drag: Drag = null;
   let pointer = { x: 0, y: 0 };
   let messageTimer = 0;
+  let toastTimer = 0;
 
   const flash = (text: string) => {
     message.textContent = text;
@@ -200,11 +208,26 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, gam
     messageTimer = window.setTimeout(() => (message.textContent = ""), 3000);
   };
 
+  const notice = (text: string) => {
+    toast.textContent = text;
+    toast.classList.add("visible");
+    window.clearTimeout(toastTimer);
+    toastTimer = window.setTimeout(() => toast.classList.remove("visible"), 3500);
+  };
+
+  /** 死に石取りの間に盤上へ置こうとしたとき: 石を元に戻して理由を伝える。 */
+  const rejectBoardPlacement = () => {
+    session.cancel();
+    notice("死に石取りの間は、盤上で石を動かせません。死に石をアゲハマトレイに移すと整地に進めます。");
+  };
+
   const render = () => {
     const origin = session.hand?.origin;
     view.render(session.board, session.marks, origin?.kind === "board" ? origin.points : []);
     phaseLabel.textContent =
-      session.phase === "removal" ? "① 死に石取り：死に石をアゲハマトレイへ" : "② 整地：アゲハマを埋めて地を整える";
+      session.phase === "removal"
+        ? `① 死に石取り：死に石をアゲハマトレイへ（残り ${countDeadStones(session)} 個）`
+        : "② 整地：アゲハマを埋めて地を整える";
     penaltyLabel.textContent = `ペナルティ ${session.penalties} 回（+${(session.penalties * PENALTY_MS) / 1000} 秒）`;
     for (const color of [BLACK, WHITE] as const) {
       trays[color].count.textContent = `${session.position.trays[color]} 個`;
@@ -229,34 +252,37 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, gam
   };
 
   // --- 盤の操作 ---
+  const place = (i: number) => {
+    if (!session.placeAt(i) && session.phase === "removal") rejectBoardPlacement();
+  };
+
+  /** クリック（押した点で離した）。 */
+  const click = (i: number) => {
+    if (session.hand && session.isOrigin(i)) session.cancel();
+    else if (session.board.cells[i] === EMPTY) {
+      if (session.hand) place(i);
+    } else if (!session.pickUp([i]) && session.hand?.origin.kind === "tray") {
+      notice("アゲハマを持っている間は、盤上の石を追加で持てません。");
+    }
+  };
+
   view.svg.addEventListener("pointerdown", (e) => {
     if (e.button !== 0) return;
     const i = view.pointAt(e.clientX, e.clientY);
     if (i === null) return;
     pointer = { x: e.clientX, y: e.clientY };
-    const before = session.penalties;
-    if (session.hand) {
-      if (session.isOrigin(i)) session.cancel();
-      else if (session.board.cells[i] === EMPTY && !session.placeAt(i) && session.phase === "removal") {
-        flash("死に石取りの間は、アゲハマトレイにだけ置けます");
-      }
-      penaltyCheck(before);
-    } else if (session.board.cells[i] !== EMPTY) {
-      session.pickUp([i]);
-      drag = { kind: "carry", from: i };
-    } else {
-      drag = { kind: "select", start: i, current: i };
-    }
+    // 石を持って空点から引っ張ったら、離した点に置く（ドロップ）。それ以外は範囲選択
+    const dropping = session.hand !== null && session.board.cells[i] === EMPTY;
+    drag = { kind: "press", start: i, current: i, dropping };
     e.preventDefault();
-    render();
   });
 
   const onMove = (e: PointerEvent) => {
     pointer = { x: e.clientX, y: e.clientY };
-    if (drag?.kind === "select") {
+    if (drag?.kind === "press") {
       const i = view.pointAt(e.clientX, e.clientY);
       if (i !== null) drag.current = i;
-      view.showSelection(drag.start, drag.current);
+      if (!drag.dropping && drag.current !== drag.start) view.showSelection(drag.start, drag.current);
     }
     renderGhost();
   };
@@ -264,19 +290,23 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, gam
   const onUp = (e: PointerEvent) => {
     if (!drag) return;
     const before = session.penalties;
-    if (drag.kind === "carry") {
-      const tray = trayUnder(e.clientX, e.clientY);
-      const i = view.pointAt(e.clientX, e.clientY);
+    const tray = trayUnder(e.clientX, e.clientY);
+    const i = view.pointAt(e.clientX, e.clientY);
+    if (drag.kind === "press" && !drag.dropping && drag.current !== drag.start) {
+      // 範囲選択（押した点が空点でも石でもよい）。持っている石に追加する
+      view.showSelection(null, null);
+      const points = pointsInRect(settings.size, drag.start, drag.current);
+      if (!session.pickUp(points) && session.hand?.origin.kind === "tray") {
+        notice("アゲハマを持っている間は、盤上の石を追加で持てません。");
+      }
+    } else if (drag.kind === "press" && i === drag.start) {
+      click(i);
+    } else if (tray !== null) {
       const origin = session.hand?.origin;
       // トレイの「持つ」ボタンを離しただけなら、持ったままにする
-      const backToOrigin = origin?.kind === "tray" && origin.owner === tray;
-      if (tray !== null) {
-        if (!backToOrigin) session.dropToTray(tray);
-      }
-      else if (i !== null && i !== drag.from && session.board.cells[i] === EMPTY) session.placeAt(i);
-    } else {
-      view.showSelection(null, null);
-      session.pickUp(pointsInRect(settings.size, drag.start, drag.current));
+      if (!(origin?.kind === "tray" && origin.owner === tray)) session.dropToTray(tray);
+    } else if (i !== null && session.board.cells[i] === EMPTY && session.hand) {
+      place(i);
     }
     drag = null;
     penaltyCheck(before);
@@ -310,7 +340,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, gam
         }
         const count = n ?? session.position.trays[color];
         for (let k = 0; k < count; k++) if (!session.pickFromTray(color)) break;
-        if (session.hand) drag = { kind: "carry", from: null };
+        if (session.hand) drag = { kind: "carry" };
         pointer = { x: e.clientX, y: e.clientY };
         render();
       });
@@ -345,6 +375,7 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, gam
     document.removeEventListener("contextmenu", onContextMenu);
     window.clearInterval(tick);
     window.clearTimeout(messageTimer);
+    window.clearTimeout(toastTimer);
   };
 
   quitButton.addEventListener("click", () => {
@@ -366,6 +397,12 @@ function showGame(root: HTMLElement, settings: Settings, position: Position, gam
   });
 
   render();
+}
+
+/** まだトレイに移していない死に石の数（手に持っている分も含む）。 */
+function countDeadStones(session: Session): number {
+  const onBoard = session.board.dead.reduce((n, d) => n + d, 0);
+  return onBoard + (session.hand?.stones.filter((s) => s.dead).length ?? 0);
 }
 
 function trayElement(owner: Color) {

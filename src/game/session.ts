@@ -77,12 +77,17 @@ export class Session {
     return (this.finishedAt ?? this.now()) - this.startedAt + this.penalties * PENALTY_MS;
   }
 
-  /** 盤上の石を持つ。points は持つ順番に並べる。 */
+  /**
+   * 盤上の石を持つ。points は持つ順番に並べる。
+   * 盤上から持っている最中（まだどこにも置いていない）なら、持っている石に追加する。
+   */
   pickUp(points: number[]): boolean {
-    if (this.hand || this.phase === "finished") return false;
+    if (this.phase === "finished") return false;
+    const hand = this.hand;
+    if (hand && (hand.origin.kind !== "board" || hand.placed.length > 0)) return false;
     const stones = points.filter((i) => this.board.cells[i] !== EMPTY);
     if (stones.length === 0) return false;
-    const before = this.snapshot();
+    const before = hand?.before ?? this.snapshot();
     const carriedMark = stones.some((i) => this.marks.has(i));
     const held = stones.map((i) => {
       const stone: HeldStone = { color: this.board.cells[i] as Color, dead: this.board.dead[i] === 1 };
@@ -91,7 +96,13 @@ export class Session {
       this.marks.delete(i);
       return stone;
     });
-    this.hand = { stones: held, origin: { kind: "board", points: stones }, placed: [], carriedMark, before };
+    if (hand && hand.origin.kind === "board") {
+      hand.stones.push(...held);
+      hand.origin.points.push(...stones);
+      hand.carriedMark ||= carriedMark;
+    } else {
+      this.hand = { stones: held, origin: { kind: "board", points: stones }, placed: [], carriedMark, before };
+    }
     return true;
   }
 
