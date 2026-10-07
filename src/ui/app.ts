@@ -13,6 +13,7 @@ import { DEFAULT_HAND_LIMIT, Match, Player, byDistanceFrom } from "../game/match
 import { PENALTY_MS, Session } from "../game/session";
 import { BoardView } from "./boardView";
 import { TRAY_SLOTS, TrayView } from "./trayView";
+import { CpuResult, addCpuRecord, addSoloRecord, loadScores, soloRanking } from "./scores";
 
 interface Settings {
   /** ひとりで / vs CPU（仕様書 §3）。 */
@@ -47,7 +48,6 @@ const REPLAY_MS = 10_000;
 const generator = new GameGenerator();
 
 const SETTINGS_KEY = "go-ssb:settings";
-const BEST_KEY = (size: number) => `go-ssb:best:${size}`;
 
 /** スマートフォン相当の画面では 19 路を選べない（仕様書 §6）。 */
 const isSmallScreen = () => window.matchMedia("(max-width: 768px)").matches;
@@ -199,10 +199,15 @@ function showSettings(root: HTMLElement, settings: Settings): void {
         ),
       ]),
       h("button", { id: "start-button", class: "primary" }, ["スタート"]),
+      h("button", { id: "scoreboard-button", type: "button" }, ["スコアボード"]),
       h("p", { class: "links" }, [h("a", { href: "https://github.com/kos59125/go-ssb/blob/main/docs/rulebook.md", target: "_blank" }, ["ルールブック"])]),
     ]),
   );
   const selected = (name: string) => root.querySelector<HTMLInputElement>(`input[name="${name}"]:checked`)!.value;
+  root.querySelector("#scoreboard-button")!.addEventListener("click", () => {
+    window.clearTimeout(seedTimer);
+    showScoreboard(root, Number(selected("size")), selected("mode") === "cpu" ? "cpu" : "solo");
+  });
   const seedInput = root.querySelector<HTMLInputElement>("#seed")!;
   const sgfInfo = root.querySelector<HTMLParagraphElement>("#sgf-info")!;
   const startButton = root.querySelector<HTMLButtonElement>("#start-button")!;
@@ -886,6 +891,7 @@ function showGame(
     // CPU が続きを計画できれば引き継ぐ。できなければ自分の操作をすべて元に戻し、死に石取りからやり直す
     session.cancel();
     if (!session.canHandOver() || !canPlanAll(session)) session.revertAll();
+    if (cpuMode && !decided) recordCpuGame("giveup");
     if (cpuMode) decided = true;
     phaseLabel.textContent = cpuMode ? "ギブアップ（CPU の勝ち）。CPU が代わりに整地しています…" : "ギブアップ。CPU が代わりに整地しています…";
     showGiveUpResult();
@@ -932,7 +938,7 @@ function showGame(
     });
     resultBox.replaceChildren(
       h("p", {}, [`黒 ${session.initialScores[BLACK]} 目・白 ${session.initialScores[WHITE]} 目`]),
-      h("div", { class: "buttons" }, [again, back]),
+      h("div", { class: "buttons" }, [again, back, scoreboardButton()]),
     );
     resultBox.hidden = false;
   };
@@ -1010,6 +1016,29 @@ function showGame(
     endGame(winner);
   };
 
+  /** 記録に残す設定（このゲームのシード・棋譜を含む）。「再プレイ」で同じゲームを始めるのに使う。 */
+  const replaySettings = (): Settings => ({ ...settings });
+  /** vs CPU の戦績を残す。 */
+  const recordCpuGame = (result: CpuResult) => {
+    addCpuRecord<Settings>({
+      date: Date.now(),
+      result,
+      size: settings.size,
+      myTime: session.phase === "finished" ? session.elapsed() : null,
+      cpuTime: cpuPlayer?.phase === "finished" ? cpuPlayer.elapsed() : null,
+      penalties: session.penalties,
+      settings: replaySettings(),
+    });
+  };
+  const scoreboardButton = () => {
+    const button = h("button", {}, ["スコアボード"]);
+    button.addEventListener("click", () => {
+      leave();
+      showScoreboard(root, settings.size, cpuMode ? "cpu" : "solo");
+    });
+    return button;
+  };
+
   /** 終了: 画面はそのままで、操作を止めて結果をパネルに出す。 */
   const endGame = (winner?: "me" | "cpu") => {
     cleanup();
@@ -1038,18 +1067,32 @@ function showGame(
       const mine = session.phase === "finished" ? formatTime(session.elapsed()) : "未完了";
       const theirs = cpuPlayer!.phase === "finished" ? formatTime(cpuPlayer!.elapsed()) : "未完了";
       lines.push(h("p", {}, [`あなた ${mine}・CPU ${theirs}`]));
+      recordCpuGame(winner === "me" ? "win" : "lose");
     } else {
       phaseLabel.textContent = "整地完了！";
       const time = session.elapsed();
-      const best = loadBest(settings.size);
-      const isBest = best === null || time < best;
-      if (isBest) saveBest(settings.size, time);
-      lines.push(h("p", {}, [isBest ? `${settings.size} 路のベストタイム更新！` : `${settings.size} 路のベスト: ${formatTime(best!)}`]));
+      const rank = addSoloRecord<Settings>({
+        time,
+        penalties: session.penalties,
+        date: Date.now(),
+        size: settings.size,
+        settings: replaySettings(),
+      });
+      const best = soloRanking(loadScores<Settings>(), settings.size)[0];
+      lines.push(
+        h("p", {}, [
+          rank === 1
+            ? `${settings.size} 路のベストタイム更新！`
+            : rank !== null
+              ? `${settings.size} 路の ${rank} 位（ベスト ${formatTime(best.time)}）`
+              : `${settings.size} 路のベスト: ${formatTime(best.time)}`,
+        ]),
+      );
     }
     resultBox.replaceChildren(
       h("p", {}, [`黒 ${session.initialScores[BLACK]} 目・白 ${session.initialScores[WHITE]} 目`]),
       ...lines,
-      h("div", { class: "buttons" }, [again, back]),
+      h("div", { class: "buttons" }, [again, back, scoreboardButton()]),
     );
     resultBox.hidden = false;
   };
@@ -1345,8 +1388,8 @@ const MISTAKE_TEXT: Record<CpuLevel, string> = {
   expert: "石を 6 個まで持つ、ミスや無駄な操作をしない",
 };
 
-function loadSettings(): Settings {
-  const fallback: Settings = {
+function defaultSettings(): Settings {
+  return {
     mode: "solo",
     myColor: BLACK,
     cpuLevel: "normal",
@@ -1359,12 +1402,25 @@ function loadSettings(): Settings {
     replay: false,
     seed: randomSeed(),
   };
+}
+
+function loadSettings(): Settings {
   try {
     const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "{}");
-    const settings = { ...fallback, ...saved, seed: fallback.seed };
+    return normalizeSettings({ ...saved, seed: undefined });
+  } catch {
+    return defaultSettings();
+  }
+}
+
+/** 保存した設定（古い形式や壊れた値を含みうる）を、使える設定にする。 */
+function normalizeSettings(saved: Partial<Settings>): Settings {
+  const fallback = defaultSettings();
+  try {
+    const settings: Settings = { ...fallback, ...saved, seed: saved.seed ?? fallback.seed };
     if (!isCpuLevel(settings.cpuLevel)) settings.cpuLevel = fallback.cpuLevel;
     settings.handLimit = clampHandLimit(settings.handLimit);
-    const rules = saved.shapeRules ?? {};
+    const rules: Partial<ShapeRules> = saved.shapeRules ?? {};
     settings.shapeRules = {
       oneLineFrom: rules.oneLineFrom === 5 || rules.oneLineFrom === 10 ? rules.oneLineFrom : null,
       allowFiveByOdd: rules.allowFiveByOdd === true,
@@ -1388,21 +1444,112 @@ function saveSettings(settings: Settings): void {
   }
 }
 
-function loadBest(size: number): number | null {
-  try {
-    const value = localStorage.getItem(BEST_KEY(size));
-    return value === null ? null : Number(value);
-  } catch {
-    return null;
-  }
+const RESULT_LABEL: Record<CpuResult, string> = { win: "勝ち", lose: "負け", giveup: "ギブアップ" };
+
+/**
+ * スコアボード（仕様書 §2.9）。ひとりでモードは盤のサイズごとのベストタイム上位 10 件、
+ * vs CPU は直近 10 戦。「再プレイ」で、その記録と同じ設定（シード・整地ルール・棋譜など）で始める。
+ */
+function showScoreboard(root: HTMLElement, size: number, tab: "solo" | "cpu"): void {
+  const scores = loadScores<Settings>();
+  const replayButton = (saved: Settings) => {
+    const button = h("button", { type: "button", class: "replay" }, ["再プレイ"]);
+    button.addEventListener("click", () => {
+      const settings = normalizeSettings(saved);
+      saveSettings(settings);
+      void prepareGame(root, settings);
+    });
+    return button;
+  };
+  const source = (r: { settings: Settings }) =>
+    r.settings.record ? `棋譜: ${recordLabel(r.settings.record)}` : `シード ${r.settings.seed}`;
+  const rulesLabel = (r: { settings: Settings }) => {
+    const rules = normalizeSettings(r.settings).shapeRules;
+    const parts: string[] = [];
+    if (rules.oneLineFrom !== null) parts.push(`1 列は ${rules.oneLineFrom} 目以上禁止`);
+    if (rules.allowFiveByOdd) parts.push("5 × 奇数あり");
+    return parts.join("・");
+  };
+  const detail = (r: { settings: Settings }) =>
+    h("div", { class: "score-detail" }, [source(r), ...(rulesLabel(r) ? [` ・ ${rulesLabel(r)}`] : [])]);
+
+  // ひとりで: 盤のサイズのタブ
+  const sizes = [19, 13, 9];
+  let current = sizes.includes(size) ? size : 19;
+  const soloBody = h("div", {}, []);
+  const sizeTabs = h(
+    "div",
+    { class: "tabs", role: "tablist" },
+    sizes.map((n) => {
+      const b = h("button", { type: "button", role: "tab", "data-size": String(n) }, [`${n} 路`]);
+      b.addEventListener("click", () => {
+        current = n;
+        renderSolo();
+      });
+      return b;
+    }),
+  );
+  const renderSolo = () => {
+    for (const b of sizeTabs.querySelectorAll("button")) b.setAttribute("aria-selected", String(b.dataset.size === String(current)));
+    const ranking = soloRanking(scores, current);
+    soloBody.replaceChildren(
+      ranking.length === 0
+        ? h("p", { class: "note" }, ["まだ記録がありません。"])
+        : h("ol", { class: "score-list" }, ranking.map((r, k) =>
+            h("li", {}, [
+              h("span", { class: "score-rank" }, [`${k + 1}`]),
+              h("div", { class: "score-main" }, [
+                h("div", { class: "score-head" }, [
+                  h("strong", { class: "score-time" }, [formatTime(r.time)]),
+                  h("span", {}, [r.penalties > 0 ? `ペナルティ ${r.penalties} 回` : "ペナルティなし"]),
+                  h("span", { class: "score-date" }, [formatDate(r.date)]),
+                ]),
+                detail(r),
+              ]),
+              replayButton(r.settings),
+            ]),
+          )),
+    );
+  };
+
+  const cpuList =
+    scores.cpu.length === 0
+      ? h("p", { class: "note" }, ["まだ記録がありません。"])
+      : h("ol", { class: "score-list cpu" }, scores.cpu.map((r) =>
+          h("li", {}, [
+            h("span", { class: `score-result ${r.result}` }, [RESULT_LABEL[r.result]]),
+            h("div", { class: "score-main" }, [
+              h("div", { class: "score-head" }, [
+                h("strong", {}, [`CPU ${CPU_LEVELS[r.settings.cpuLevel]?.label ?? r.settings.cpuLevel}`]),
+                h("span", {}, [`${r.settings.myColor === BLACK ? "黒" : "白"}番・${r.size} 路`]),
+                h("span", {}, [`あなた ${r.myTime === null ? "未完了" : formatTime(r.myTime)}・CPU ${r.cpuTime === null ? "未完了" : formatTime(r.cpuTime)}`]),
+                h("span", { class: "score-date" }, [formatDate(r.date)]),
+              ]),
+              detail(r),
+            ]),
+            replayButton(r.settings),
+          ]),
+        ));
+
+  const soloSection = h("section", { class: "setting-group" }, [h("h2", {}, ["ひとりで（ベストタイム）"]), sizeTabs, soloBody]);
+  const cpuSection = h("section", { class: "setting-group" }, [h("h2", {}, ["vs CPU（直近 10 戦）"]), cpuList]);
+  const back = h("button", { type: "button" }, ["設定に戻る"]);
+  back.addEventListener("click", () => showSettings(root, loadSettings()));
+  root.replaceChildren(
+    h("main", { class: "settings scoreboard" }, [
+      h("h1", {}, ["スコアボード"]),
+      ...(tab === "cpu" ? [cpuSection, soloSection] : [soloSection, cpuSection]),
+      h("p", { class: "note" }, ["記録はこのブラウザーにだけ保存されます。"]),
+      back,
+    ]),
+  );
+  renderSolo();
 }
 
-function saveBest(size: number, ms: number): void {
-  try {
-    localStorage.setItem(BEST_KEY(size), String(ms));
-  } catch {
-    // 保存できなくてもゲームは続けられる
-  }
+function formatDate(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 /** ゲーム画面のシードの表示。文字を選択でき、ボタンでコピーできる。 */
