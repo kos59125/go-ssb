@@ -15,8 +15,8 @@ export interface Analysis {
   /** 点インデックス → regions の添字。生きた石の点は -1。 */
   regionOf: Int32Array;
   /**
-   * セキの点: セキの石（単独で生きていないグループ）、共有の呼吸点（中立の領域）とセキの石の眼、
-   * それらに接する生きた石（セキの境界の石）。整地では触れない（仕様書 §2.8）。
+   * セキの点: セキの中の空点（共有の呼吸点とセキの石の眼）と、それに接する生きた石（セキの境界の石）。
+   * セキのグループの石でも、セキの中の空点に接していない石は含まない。整地では触れない（仕様書 §2.8）。
    */
   seki: Set<number>;
 }
@@ -128,7 +128,7 @@ function markSeki(board: Board, regions: Region[], regionOf: Int32Array): Set<nu
     groups.set(root, group);
   });
 
-  const seki = new Set<number>();
+  const sekiStones: number[] = [];
   const inner = new Set<number>();
   for (const group of groups.values()) {
     if (!group.touchesNeutral) continue;
@@ -138,18 +138,20 @@ function markSeki(board: Board, regions: Region[], regionOf: Int32Array): Set<nu
       regions[r].territory = false;
       for (const i of regions[r].points) inner.add(i);
     }
-    for (const i of group.stones) seki.add(i);
+    sekiStones.push(...group.stones);
   }
-  if (seki.size === 0) return seki;
+  const seki = new Set<number>();
+  if (sekiStones.length === 0) return seki;
   // 共有の呼吸点（セキの石が接する中立の領域）
-  for (const i of [...seki]) {
+  for (const i of sekiStones) {
     for (const j of board.neighbors(i)) {
       if (board.isLiveStone(j)) continue;
       const r = regions[regionOf[j]];
       if (r.owner === null) for (const k of r.points) inner.add(k);
     }
   }
-  // セキの中の点と、それに接する生きた石（境界の石）
+  // セキの中の点と、それに接する生きた石（境界の石）。セキのグループの石でも、
+  // セキの中の点に接していなければ触れてよい
   for (const i of inner) {
     seki.add(i);
     for (const j of board.neighbors(i)) if (board.isLiveStone(j)) seki.add(j);
