@@ -7,7 +7,7 @@ import { KOMI, finishRecord } from "./generate";
 import { buildFeatures } from "./features";
 import { GoGame, PASS } from "./go";
 import { createEvaluator } from "./model";
-import { MODEL_PATH } from "./protocol";
+import { MODEL_PATH, UnfilledDameError } from "./protocol";
 import { parseSgf } from "./sgf";
 
 describe("parseSgf", () => {
@@ -69,6 +69,18 @@ describe("置き碁とパス", () => {
     const evaluate = await createEvaluator(ort, new Uint8Array(readFileSync(`public/${MODEL_PATH}`)), KOMI);
     // この棋譜は序盤で終わっているので、ダメ（両方の色に接する空点）がたくさん残っている
     await expect(finishRecord(evaluate, parseSgf(SGF))).rejects.toThrow(/ダメが詰まっていません/);
+    // エラーにはダメの位置（空点）と終局図の石が入っている
+    const err = await finishRecord(evaluate, parseSgf(SGF)).catch((e) => e);
+    expect(err).toBeInstanceOf(UnfilledDameError);
+    const { size, cells, points } = (err as UnfilledDameError).dame;
+    expect(points.length).toBeGreaterThan(0);
+    expect(err.message).toContain(`${points.length} か所`);
+    for (const i of points) expect(cells[i]).toBe(0);
+    // ダメを埋めて進める設定なら読み込める。埋めた石はダメの点に置かれる
+    const game = await finishRecord(evaluate, parseSgf(SGF), false, undefined, true);
+    expect(game.size).toBe(size);
+    expect(game.dameFills.map((m) => m.point).sort((a, b) => a - b)).toEqual([...points].sort((a, b) => a - b));
+    for (const i of points) expect(game.position.board.cells[i]).not.toBe(0);
   }, 60_000);
 });
 

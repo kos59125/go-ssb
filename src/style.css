@@ -1212,3 +1212,13 @@ button.share-x {
 .result-dialog .buttons button {
   min-width: 8em;
 }
+
+/* SGF のダメの位置を示す盤 */
+.dame-figure {
+  width: min(100%, 420px);
+  margin: 0 auto;
+}
+
+.dame-figure .board {
+  pointer-events: none;
+}

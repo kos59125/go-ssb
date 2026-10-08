@@ -2,7 +2,7 @@ import { Board } from "../core/board";
 import { DEFAULT_SHAPE_RULES, type ShapeRules } from "../core/shapes";
 import type { GeneratedGame } from "./generate";
 import type { GameRecord } from "./sgf";
-import { MODEL_PATH, type SerializedGame, type WorkerRequest, type WorkerResponse } from "./protocol";
+import { MODEL_PATH, UnfilledDameError, type SerializedGame, type WorkerRequest, type WorkerResponse } from "./protocol";
 
 /**
  * 終局図の生成を Web Worker で行う。盤サイズとシードの組ごとに先読みしておける。
@@ -59,12 +59,17 @@ export class GameGenerator {
   }
 
   /** 実戦の棋譜（SGF）から整地用の局面を作る。 */
-  fromRecord(record: GameRecord, forCpu = false, rules: ShapeRules = DEFAULT_SHAPE_RULES): Promise<GeneratedGame> {
+  fromRecord(
+    record: GameRecord,
+    forCpu = false,
+    rules: ShapeRules = DEFAULT_SHAPE_RULES,
+    fillDame = false,
+  ): Promise<GeneratedGame> {
     const worker = this.ensureWorker();
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      worker.postMessage({ type: "record", id, record, forCpu, rules, modelUrl: modelUrl() } satisfies WorkerRequest);
+      worker.postMessage({ type: "record", id, record, forCpu, rules, fillDame, modelUrl: modelUrl() } satisfies WorkerRequest);
     });
   }
 
@@ -89,7 +94,7 @@ export class GameGenerator {
       }
       this.pending.delete(msg.id);
       if (msg.type === "done") entry.resolve(deserialize(msg.game));
-      else entry.reject(new Error(msg.message));
+      else entry.reject(msg.dame ? new UnfilledDameError(msg.message, msg.dame) : new Error(msg.message));
     };
     worker.onerror = (e) => {
       for (const entry of this.pending.values()) entry.reject(new Error(e.message));

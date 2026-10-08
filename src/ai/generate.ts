@@ -4,6 +4,7 @@ import { Evaluation, Evaluator } from "./model";
 import { GoGame, Move, PASS } from "./go";
 import type { GameRecord } from "./sgf";
 import { SerializedLayout, planLayouts } from "../game/layout";
+import { UnfilledDameError } from "./protocol";
 import { DEFAULT_SHAPE_RULES, ShapeRules } from "../core/shapes";
 
 export const KOMI = 6.5;
@@ -58,6 +59,7 @@ export async function finishRecord(
   record: GameRecord,
   forCpu = false,
   rules: ShapeRules = DEFAULT_SHAPE_RULES,
+  fillDame = false,
 ): Promise<GeneratedGame> {
   const game = new GoGame(record.size);
   for (const { point, color } of record.setup) if (point !== PASS) game.setup(point, color);
@@ -66,7 +68,7 @@ export async function finishRecord(
     if (!game.isLegal(move.point)) throw new Error(`${k + 1} 手目が打てない手です`);
     game.play(move.point);
   }
-  const finished = await finish(evaluate, game, { random: Math.random, record });
+  const finished = await finish(evaluate, game, { random: Math.random, record, fillDame });
   // 実戦の棋譜は作り直せないので、整地の形が見つからない色は null のまま渡す
   const layouts = forCpu ? planLayouts(finished!.position, rules) : undefined;
   return { ...finished!, result: record.result ?? finished!.result, layouts };
@@ -246,6 +248,8 @@ interface FinishOptions {
   reject?: (reason: string) => void;
   /** 実戦の棋譜（SGF）用: 作り直しの判定をせず、盤の向きも変えない。 */
   record?: { setup: Move[]; komi: number };
+  /** 実戦の棋譜でダメが残っていたら、エラーにせずに埋めて進める。 */
+  fillDame?: boolean;
 }
 
 async function finish(evaluate: Evaluator, game: GoGame, options: FinishOptions): Promise<GeneratedGame | null> {
@@ -278,9 +282,10 @@ async function finish(evaluate: Evaluator, game: GoGame, options: FinishOptions)
   const board = new Board(size, game.cells.slice(), dead);
   const { fills: dameFills, unresolved } = fillDame(game, board, own);
   // 実戦の棋譜は、ダメを詰めた終局図であることを求める（セキの共有の呼吸点は埋められないので数えない）
-  if (record && dameFills.length > 0) {
-    throw new Error(
+  if (record && dameFills.length > 0 && !options.fillDame) {
+    throw new UnfilledDameError(
       `終局図のダメが詰まっていません（${dameFills.length} か所）。ダメを詰めた終局図の SGF を読み込んでください。`,
+      { size, cells: game.cells.slice(), points: dameFills.map((m) => m.point) },
     );
   }
   // 埋めきれなかった中立の空点がセキにしては多い

@@ -1,4 +1,5 @@
 import { GameGenerator } from "../ai/client";
+import { UnfilledDameError } from "../ai/protocol";
 import { GeneratedGame } from "../ai/generate";
 import { GoGame } from "../ai/go";
 import { GameRecord, parseSgf } from "../ai/sgf";
@@ -38,6 +39,8 @@ interface Settings {
   seed: string;
   /** 読み込んだ実戦の棋譜（SGF）。あればシードの代わりにこれを使う。保存しない。 */
   record?: GameRecord;
+  /** 棋譜の終局図にダメが残っていたら、埋めて始める（エラーの画面で選ぶ）。保存しない。 */
+  fillDame?: boolean;
 }
 
 /** CPU のカーソルが操作する場所へ動く時間（CSS の .cpu-cursor の transition と合わせる）。 */
@@ -326,7 +329,7 @@ async function prepareGame(root: HTMLElement, settings: Settings): Promise<void>
   let game: GeneratedGame;
   try {
     game = settings.record
-      ? await generator.fromRecord(settings.record, forCpu, settings.shapeRules)
+      ? await generator.fromRecord(settings.record, forCpu, settings.shapeRules, settings.fillDame ?? false)
       : await generator.take(settings.size, seed, forCpu, settings.shapeRules, (move) => (status.textContent = `自動対局中… ${move} 手目`));
   } catch (err) {
     if (cancelled) return;
@@ -335,6 +338,21 @@ async function prepareGame(root: HTMLElement, settings: Settings): Promise<void>
       status.textContent = `棋譜を読み込めませんでした: ${err instanceof Error ? err.message : err}`;
       status.classList.add("error");
       back.textContent = "設定に戻る";
+      if (err instanceof UnfilledDameError) {
+        // どこがダメかを盤に × で示し、そのダメでよければ埋めて始められるようにする
+        const { size, cells, points } = err.dame;
+        const view = new BoardView(size);
+        view.render(new Board(size, cells), new Set(), [], new Set(points));
+        const fill = h("button", { class: "primary" }, ["このダメを埋めて始める"]);
+        fill.addEventListener("click", () => void prepareGame(root, { ...settings, fillDame: true }));
+        status.after(
+          h("div", { class: "dame-figure" }, [view.svg]),
+          h("p", { class: "note" }, [
+            "× の点がダメ（どちらの地でもない空点）です。このダメでよければ、アプリが黒か白の石で埋めて始めます（埋めた石は棋譜の再生の後に置きます）。",
+          ]),
+          fill,
+        );
+      }
       return;
     }
     status.textContent = `終局図を生成できませんでした（${err instanceof Error ? err.message : err}）。`;
@@ -1460,7 +1478,8 @@ function normalizeSettings(saved: Partial<Settings>): Settings {
 
 function saveSettings(settings: Settings): void {
   try {
-    const { seed: _seed, ...rest } = settings;
+    // シード・棋譜・ダメを埋めるかは保存しない（次に開いたときは「自動で作る」から）
+    const { seed: _seed, record: _record, fillDame: _fillDame, ...rest } = settings;
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(rest));
   } catch {
     // 保存できなくてもゲームは続けられる
