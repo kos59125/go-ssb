@@ -180,6 +180,17 @@ export class Match {
    * 動かした石を元に戻した盤で、境界が閉じていて目数が変わっていれば、そのプレイヤーの操作だけで
    * 目数が変わったと分かる。
    */
+  /** moves を元に戻すと、境界が閉じて目数が最後に閉じていたときに戻るか。 */
+  wouldRestore(moves: readonly Move[]): boolean {
+    const resting = this.restingPosition();
+    const position = { board: resting.board.clone(), trays: { ...resting.trays } };
+    revertMoves(position, moves);
+    if (openPoints(position.board) > this.baseOpenPoints.size) return false;
+    const analysis = analyze(position.board);
+    const scores = { [BLACK]: score(position, BLACK, analysis), [WHITE]: score(position, WHITE, analysis) };
+    return sameScores(scores, this.settledScores);
+  }
+
   culprits(): Player[] {
     return this.players.filter((p) => {
       if (p.pendingMoves.length === 0) return false;
@@ -618,10 +629,22 @@ export class Player {
       if (hand.carriedMark) {
         // 間違えた石を別の誤った場所に動かしただけなら、印も一緒に動かす
         for (const i of hand.placed) this.marks.add(i);
-      } else {
-        this.penalize(hand.moves, hand.placed, hand.origins);
+        return;
       }
-      return;
+      // 反対の色の地に置いたアゲハマだけを元に戻す（一緒に持っていたほかの石はそのまま判定する）
+      const wrongPoints = new Set(hand.placedPrisoners.filter((i) => this.placedInEnemyTerritory([i])));
+      const wrong = hand.moves.filter((m) => m.to.kind === "board" && wrongPoints.has(m.to.point));
+      this.penalties++;
+      if (!this.match.options.undoOnPenalty) {
+        for (const i of wrongPoints) this.marks.add(i);
+        return;
+      }
+      this.undo(wrong);
+      hand = {
+        ...hand,
+        moves: hand.moves.filter((m) => !wrong.includes(m)),
+        placed: hand.placed.filter((i) => !wrongPoints.has(i)),
+      };
     }
 
     const pending = this.pending;
@@ -665,7 +688,8 @@ export class Player {
     if (live.length > 0) {
       this.penalties++;
       this.rejected = live.map((m) => ({ point: (m.from as { point: number }).point, color: m.color }));
-      this.undo(hand.moves);
+      // 元に戻すのは死に石でない石だけ（一緒に取った死に石はトレイに入れたまま）
+      this.undo(live);
     }
     this.updatePhase();
     if (!this.boundaryOpen) this.match.markSettled();
@@ -693,6 +717,17 @@ export class Player {
   /** 境界が閉じた時点で目数を変えていたときのペナルティ。境界が開いてから自分が動かした石を対象にする。 */
   penalizePending(flipped: number[]): void {
     const { moves, placed, origins } = this.pending;
+    // 1 手だけ戻せば目数が戻るなら、その石だけを元に戻す（一緒に動かしたほかの石はそのまま）
+    if (this.match.options.undoOnPenalty && moves.length > 1) {
+      const single = [...moves].reverse().find((m) => this.match.wouldRestore([m]));
+      if (single) {
+        this.penalties++;
+        this.clearPending();
+        this.undo([single]);
+        if (sameScores(this.scores(), this.initialScores)) this.marks.clear();
+        return;
+      }
+    }
     // 境界の状態の記録し直し（markSettled）は、責任者全員を処理した後に呼び出し側で行う
     this.penalize(moves, flipped.length > 0 ? flipped : placed, flipped.length > 0 ? [] : origins, false);
   }

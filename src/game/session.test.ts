@@ -86,6 +86,33 @@ describe("Session", () => {
     expect(s.elapsed()).toBe(2000);
   });
 
+  it("死に石取りで死に石と生きた石を一緒に取ったら、生きた石だけが元に戻る", () => {
+    const { s } = session();
+    const dead = s.board.index(2, 1);
+    const live = s.board.index(4, 1);
+    expect(s.pickUp([dead, live])).toBe(true);
+    s.dropToTray(BLACK); // 白の死に石 → 黒のトレイ
+    s.dropToTray(WHITE); // 黒の生きた石 → 白のトレイ（誤り）
+    expect(s.penalties).toBe(1);
+    expect(s.board.get(4, 1)).toBe(BLACK); // 生きた石は戻る
+    expect(s.board.get(2, 1)).toBe(0); // 死に石は取ったまま
+    expect(s.position.trays).toEqual({ [BLACK]: 1, [WHITE]: 0 });
+  });
+
+  it("まとめて置いたアゲハマのうち、反対の色の地に置いたものだけが元に戻る", () => {
+    const { s } = session(true, { [BLACK]: 2, [WHITE]: 0 });
+    removeDead(s);
+    expect(s.position.trays[BLACK]).toBe(3);
+    s.pickFromTray(BLACK, 2); // 白石 2 個
+    expect(s.placeAt(s.board.index(8, 8))).toBe(true); // 白地（正しい）
+    expect(s.placeAt(s.board.index(0, 0))).toBe(true); // 黒地（誤り）→ 手が空になって判定
+    expect(s.penalties).toBe(1);
+    expect(s.board.get(8, 8)).toBe(WHITE); // 正しく置いた石はそのまま
+    expect(s.board.get(0, 0)).toBe(0); // 誤った石だけトレイに戻る
+    expect(s.position.trays[BLACK]).toBe(2);
+    expect(s.scores()).toEqual(s.initialScores);
+  });
+
   it("トレイには 1 回に 1 個ずつ入れる", () => {
     const { s } = session(true, { [BLACK]: 3, [WHITE]: 0 });
     removeDead(s);
