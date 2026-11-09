@@ -42,8 +42,8 @@ interface Settings {
   shapeRules: ShapeRules;
   /** 開始時に初手から棋譜を並べるか（仕様書 §5.1）。 */
   replay: boolean;
-  /** 終局図の打ち手（Human SL の棋力、または従来のネットワーク）。 */
-  players: BoardPlayers;
+  /** 盤面の難しさ（終局図を作る自動対局の打ち手の棋力で決まる）。 */
+  difficulty: BoardDifficulty;
   /** 終局図を作るシード。保存せず、画面を開くたびにランダムに決める。 */
   seed: string;
   /** 読み込んだ実戦の棋譜（SGF）。あればシードの代わりにこれを使う。保存しない。 */
@@ -54,19 +54,20 @@ interface Settings {
 
 
 /**
- * 終局図の打ち手。Human SL ネットワークにその棋力の人として打たせる（仕様書 §5）。
- * classic は従来のネットワーク（kata1-b6c96）だけで打つ（速い）。
+ * 盤面の難しさ。終局図を作る自動対局を、Human SL ネットワークにその棋力の人として打たせる（仕様書 §5.2）。
+ * 棋力が低いほど地が細かく分かれ、アゲハマも多い（整地の手間が多い）傾向がある。
+ * classic は従来のネットワーク（kata1-b6c96）だけで打つ。設定画面には出さない（以前の記録の再プレイ用）。
  */
-type BoardPlayers = "classic" | "easy" | "normal" | "hard";
+type BoardDifficulty = "easy" | "normal" | "hard" | "classic";
 
-const BOARD_PLAYERS: Record<BoardPlayers, { label: string; rank: string | null }> = {
-  easy: { label: "かんたん（10 級）", rank: "10k" },
-  normal: { label: "ふつう（初段）", rank: "1d" },
-  hard: { label: "むずかしい（6 段）", rank: "6d" },
-  classic: { label: "従来（速い）", rank: null },
+const BOARD_DIFFICULTIES: Record<BoardDifficulty, { label: string; rank: string | null; hidden?: boolean }> = {
+  easy: { label: "かんたん", rank: "1d" },
+  normal: { label: "ふつう", rank: "5k" },
+  hard: { label: "むずかしい", rank: "15k" },
+  classic: { label: "従来", rank: null, hidden: true },
 };
 
-const humanRank = (settings: Settings) => BOARD_PLAYERS[settings.players].rank;
+const humanRank = (settings: Settings) => BOARD_DIFFICULTIES[settings.difficulty].rank;
 
 /** 棋譜の再生にかける時間。 */
 const REPLAY_MS = 10_000;
@@ -147,18 +148,22 @@ function showSettings(root: HTMLElement, settings: Settings): void {
           "自動で作る: KataGo の自動対局でその場で作ります。\nSGF を読み込む: 終局済みの実戦の棋譜で遊びます。",
         ),
         setting(
-          "打ち手の棋力",
+          "盤面の難しさ",
           radios(
-            "players",
-            (Object.keys(BOARD_PLAYERS) as BoardPlayers[]).map((key) => ({
-              value: key,
-              label: BOARD_PLAYERS[key].label,
-              checked: settings.players === key,
-            })),
+            "difficulty",
+            (Object.keys(BOARD_DIFFICULTIES) as BoardDifficulty[])
+              .filter((key) => !BOARD_DIFFICULTIES[key].hidden)
+              .map((key) => ({
+                value: key,
+                label: BOARD_DIFFICULTIES[key].label,
+                // 隠している選択肢（以前の記録の再プレイ）のときは既定を選んでおく
+                checked: BOARD_DIFFICULTIES[settings.difficulty].hidden
+                  ? key === defaultSettings().difficulty
+                  : settings.difficulty === key,
+              })),
           ),
-          "終局図を作る自動対局を、どの棋力の人のように打たせるかです。KataGo の Human SL ネットワーク（人の対局から、段級位ごとの打ち方を学習したもの）で、その棋力の人が打ちそうな手を選びます。\n" +
-            "初回はネットワーク（約 29 MB）を読み込みます。1 局の生成に、9 路で 1 分前後、19 路で数分かかります（端末の性能によります）。\n" +
-            "従来（速い）: 以前からの小さなネットワーク（約 4 MB）だけで打ちます。数秒で生成できます。",
+          "むずかしいほど、地が細かく分かれ、アゲハマも多い終局図になりやすくなります。\n" +
+            "終局図は KataGo の Human SL ネットワーク（人の対局から打ち方を学習したもの）の自動対局で作ります。初回はネットワーク（約 29 MB）を読み込みます。1 局の生成に、9 路で 1 分前後、19 路で数分かかります（端末の性能によります）。",
           "katago-only",
         ),
         setting(
@@ -315,14 +320,14 @@ function showSettings(root: HTMLElement, settings: Settings): void {
         seedNumber(seedInput.value),
         true,
         shapeRules(),
-        BOARD_PLAYERS[selected("players") as BoardPlayers].rank,
+        BOARD_DIFFICULTIES[selected("difficulty") as BoardDifficulty].rank,
       );
     }
   }
   updateMode();
   prefetch();
   // 整地ルールが変わると、CPU が整地できる局面も変わる
-  for (const input of root.querySelectorAll<HTMLInputElement>('input[name="size"], input[name="players"], input[name="one-line"], input[name="five-by-odd"]')) {
+  for (const input of root.querySelectorAll<HTMLInputElement>('input[name="size"], input[name="difficulty"], input[name="one-line"], input[name="five-by-odd"]')) {
     input.addEventListener("change", prefetch);
   }
   let seedTimer = 0;
@@ -347,7 +352,7 @@ function showSettings(root: HTMLElement, settings: Settings): void {
     handLimits: { [BLACK]: readHandLimit(root, "hand-limit-black"), [WHITE]: readHandLimit(root, "hand-limit-white") },
     shapeRules: shapeRules(),
     replay: selected("start") === "replay",
-    players: selected("players") as BoardPlayers,
+    difficulty: selected("difficulty") as BoardDifficulty,
     seed: seedInput.value.trim() || randomSeed(),
   });
   // 設定を変えたらすぐブラウザーに保存する（シードは保存しない）。次に開いたときも同じ設定にする
@@ -647,7 +652,7 @@ function showGame(
         resultBox,
         settings.record
           ? h("p", { class: "note seed-note" }, [`棋譜: ${recordLabel(settings.record)}`])
-          : seedNote(settings.seed, playersText(settings)),
+          : seedNote(settings.seed, difficultyText(settings)),
       ]),
     ]),
     ghost,
@@ -1499,7 +1504,7 @@ function defaultSettings(): Settings {
     handLimits: { [BLACK]: DEFAULT_HAND_LIMIT, [WHITE]: DEFAULT_HAND_LIMIT },
     shapeRules: DEFAULT_SHAPE_RULES,
     replay: false,
-    players: "normal",
+    difficulty: "normal",
     seed: randomSeed(),
   };
 }
@@ -1507,8 +1512,10 @@ function defaultSettings(): Settings {
 function loadSettings(): Settings {
   try {
     const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "{}");
-    // 打ち手の棋力を保存していなければ（以前の版）、既定の棋力にする
-    return normalizeSettings({ players: defaultSettings().players, ...saved, seed: undefined });
+    // 盤面の難しさを保存していなければ（以前の版）既定にする。隠している選択肢も既定に戻す
+    const settings = normalizeSettings({ difficulty: defaultSettings().difficulty, ...saved, seed: undefined });
+    if (BOARD_DIFFICULTIES[settings.difficulty].hidden) settings.difficulty = defaultSettings().difficulty;
+    return settings;
   } catch {
     return defaultSettings();
   }
@@ -1525,8 +1532,10 @@ function normalizeSettings(saved: Partial<Settings>): Settings {
       [WHITE]: toCpuLevel(saved.watchLevels?.[WHITE]) ?? fallback.watchLevels[WHITE],
     };
     if (!["solo", "cpu", "watch"].includes(settings.mode)) settings.mode = fallback.mode;
-    // 打ち手の棋力がない記録（以前の版）は、従来のネットワークで作ったもの
-    if (!(settings.players in BOARD_PLAYERS)) settings.players = saved.players === undefined ? "classic" : fallback.players;
+    // 盤面の難しさがない記録（以前の版）は、従来のネットワークで作ったもの
+    if (!(settings.difficulty in BOARD_DIFFICULTIES)) {
+      settings.difficulty = saved.difficulty === undefined ? "classic" : fallback.difficulty;
+    }
     settings.handLimit = clampHandLimit(settings.handLimit);
     const rules: Partial<ShapeRules> = saved.shapeRules ?? {};
     settings.shapeRules = {
@@ -1578,7 +1587,7 @@ function showScoreboard(root: HTMLElement, size: number, tab: "solo" | "cpu"): v
   const source = (r: { settings: Settings }) =>
     r.settings.record
       ? `棋譜: ${recordLabel(r.settings.record)}`
-      : `${playersText(r.settings)}シード ${r.settings.seed}`;
+      : `${difficultyText(r.settings)}シード ${r.settings.seed}`;
   const rulesLabel = (r: { settings: Settings }) => {
     const rules = normalizeSettings(r.settings).shapeRules;
     const parts: string[] = [];
@@ -1662,15 +1671,15 @@ function showScoreboard(root: HTMLElement, size: number, tab: "solo" | "cpu"): v
   renderSolo();
 }
 
-/** 打ち手の棋力（従来のネットワークなら空）。シードと合わせて同じ終局図を作るのに要る。 */
-function playersText(settings: Settings): string {
-  const players = normalizeSettings(settings).players;
-  return players === "classic" ? "" : `打ち手 ${BOARD_PLAYERS[players].label}・`;
+/** 盤面の難しさ（従来のネットワークなら空）。シードと合わせて同じ終局図を作るのに要る。 */
+function difficultyText(settings: Settings): string {
+  const difficulty = normalizeSettings(settings).difficulty;
+  return difficulty === "classic" ? "" : `盤面 ${BOARD_DIFFICULTIES[difficulty].label}・`;
 }
 
 /** シードの一言（同じ局面で遊べるように添える）。棋譜で遊んだときは付けない。 */
 function seedText(settings: Settings): string {
-  return settings.record ? "" : `（${playersText(settings)}シード ${settings.seed}）`;
+  return settings.record ? "" : `（${difficultyText(settings)}シード ${settings.seed}）`;
 }
 
 /** ひとりでモードの記録のシェア文。 */
@@ -1722,7 +1731,7 @@ function formatDate(ms: number): string {
 }
 
 /** ゲーム画面のシードの表示。文字を選択でき、ボタンでコピーできる。 */
-function seedNote(seed: string, players = ""): HTMLElement {
+function seedNote(seed: string, difficulty = ""): HTMLElement {
   const copy = h("button", { type: "button", class: "copy-seed", title: "シードをコピー" }, ["コピー"]);
   copy.addEventListener("click", async () => {
     try {
@@ -1739,6 +1748,6 @@ function seedNote(seed: string, players = ""): HTMLElement {
     window.setTimeout(() => (copy.textContent = "コピー"), 1500);
   });
   const value = h("span", { class: "seed-value" }, [seed]);
-  return h("p", { class: "note seed-note" }, [players, "シード: ", value, " ", copy]);
+  return h("p", { class: "note seed-note" }, [difficulty, "シード: ", value, " ", copy]);
 }
 

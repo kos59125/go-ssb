@@ -11,7 +11,7 @@
 ## Human SL ネットワーク
 
 `b18c384nbt-humanv0-int8.onnx` は、KataGo の Human SL ネットワーク `b18c384nbt-humanv0` を ONNX に変換したものです。
-段級位などのメタデータを与えると、その棋力の人が打ちそうな手を予測します。終局図の「打ち手の棋力」で使います。
+段級位などのメタデータを与えると、その棋力の人が打ちそうな手を予測します。設定の「盤面の難しさ」に応じた棋力で、終局図を作る自動対局を打たせます。
 
 - 入手元: https://katagotraining.org/extra_networks/ （"KataGo Human SL Network" の "Raw pytorch checkpoint"）
 - 変換: `python3 tools/export_humansl.py <KataGo の python ディレクトリ> b18c384nbt-humanv0.ckpt public/models/b18c384nbt-humanv0-int8.onnx`
