@@ -155,7 +155,7 @@ function showSettings(root: HTMLElement, settings: Settings): void {
             "difficulty",
             DIFFICULTIES.map((d) => ({ value: d, label: DIFFICULTY_LABELS[d], checked: settings.difficulty === d })),
           ),
-          "自動で作る終局図の複雑さです（目安: かんたん＝10 級、ふつう＝初段、むずかしい＝6 段くらいの局面）。\n" +
+          "自動で作る終局図の複雑さです。\n" +
             "地の分かれ方（区間の数）、境界線の長さ、石のまとまりの数、死に石とアゲハマの数から複雑さを測り、選んだ難しさに合う局面を使います。",
           "katago-only",
         ),
