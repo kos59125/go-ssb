@@ -2,6 +2,7 @@ import type { InferenceSession, Tensor } from "onnxruntime-web";
 import { BLACK } from "../core/board";
 import { NUM_GLOBAL, NUM_SPATIAL, buildFeatures } from "./features";
 import { GoGame } from "./go";
+import { NUM_META } from "./humanSl";
 
 /** ネットワークの評価結果。すべて黒から見た値に直してある。 */
 export interface Evaluation {
@@ -23,17 +24,27 @@ type Ort = {
   Tensor: typeof Tensor;
 };
 
-/** ONNX に変換した KataGo のネットワークで評価する関数を作る。 */
-export async function createEvaluator(ort: Ort, model: string | Uint8Array, komi: number): Promise<Evaluator> {
+/**
+ * ONNX に変換した KataGo のネットワークで評価する関数を作る。
+ * meta を渡すと、Human SL ネットワーク用のメタデータ（[192]）も入力する。
+ */
+export async function createEvaluator(
+  ort: Ort,
+  model: string | Uint8Array,
+  komi: number,
+  meta?: (game: GoGame) => Float32Array,
+): Promise<Evaluator> {
   const session =
     typeof model === "string" ? await ort.InferenceSession.create(model) : await ort.InferenceSession.create(model);
   return async (game, options) => {
     const n = game.size;
     const { spatial, global } = buildFeatures(game, komi, options?.area);
-    const out = await session.run({
+    const feeds: Record<string, Tensor> = {
       spatial: new ort.Tensor("float32", spatial, [1, NUM_SPATIAL, n, n]),
       global: new ort.Tensor("float32", global, [1, NUM_GLOBAL]),
-    });
+    };
+    if (meta) feeds.meta = new ort.Tensor("float32", meta(game), [1, NUM_META]);
+    const out = await session.run(feeds);
     const sign = game.toPlay === BLACK ? 1 : -1;
 
     const logits = out.policy.data as Float32Array;

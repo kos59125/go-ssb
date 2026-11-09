@@ -2,7 +2,7 @@ import { Board } from "../core/board";
 import { DEFAULT_SHAPE_RULES, type ShapeRules } from "../core/shapes";
 import type { GeneratedGame } from "./generate";
 import type { GameRecord } from "./sgf";
-import { MODEL_PATH, UnfilledDameError, type SerializedGame, type WorkerRequest, type WorkerResponse } from "./protocol";
+import { HUMAN_MODEL_PATH, MODEL_PATH, UnfilledDameError, type SerializedGame, type WorkerRequest, type WorkerResponse } from "./protocol";
 
 /**
  * 終局図の生成を Web Worker で行う。盤サイズとシードの組ごとに先読みしておける。
@@ -13,20 +13,31 @@ export class GameGenerator {
   private nextId = 1;
   private readonly pending = new Map<
     number,
-    { resolve: (g: GeneratedGame) => void; reject: (e: Error) => void; onProgress?: (move: number) => void }
+    {
+      resolve: (g: GeneratedGame) => void;
+      reject: (e: Error) => void;
+      onProgress?: (move: number) => void;
+      /** Human SL ネットワークの読み込みを始めた。 */
+      onLoading?: () => void;
+      loading?: boolean;
+    }
   >();
   private readonly prefetched = new Map<string, { id: number; promise: Promise<GeneratedGame> }>();
   /** take() で待っている依頼。中断しない。 */
   private readonly taking = new Set<number>();
 
-  /** 裏で 1 局生成しておく。ほかの先読みは中断する。 */
+  /**
+   * 裏で 1 局生成しておく。ほかの先読みは中断する。
+   * @param humanRank 本局の打ち手の棋力（Human SL、例: "10k"）。null なら従来のネットワークで打つ
+   */
   prefetch(
     size: number,
     seed: number,
     forCpu = false,
     rules: ShapeRules = DEFAULT_SHAPE_RULES,
+    humanRank: string | null = null,
   ): void {
-    const key = cacheKey(size, seed, forCpu, rules);
+    const key = cacheKey(size, seed, forCpu, rules, humanRank);
     for (const [other, entry] of this.prefetched) {
       if (other === key || this.taking.has(entry.id)) continue;
       this.worker?.postMessage({ type: "cancel", id: entry.id } satisfies WorkerRequest);
@@ -34,7 +45,7 @@ export class GameGenerator {
     }
     if (this.prefetched.has(key)) return;
     const id = this.nextId++;
-    const promise = this.request(id, size, seed, forCpu, rules);
+    const promise = this.request(id, size, seed, forCpu, rules, humanRank);
     promise.catch(() => {
       if (this.prefetched.get(key)?.id === id) this.prefetched.delete(key);
     });
@@ -47,13 +58,19 @@ export class GameGenerator {
     seed: number,
     forCpu: boolean,
     rules: ShapeRules,
+    humanRank: string | null,
     onProgress?: (move: number) => void,
+    onLoading?: () => void,
   ): Promise<GeneratedGame> {
-    const key = cacheKey(size, seed, forCpu, rules);
-    this.prefetch(size, seed, forCpu, rules);
+    const key = cacheKey(size, seed, forCpu, rules, humanRank);
+    this.prefetch(size, seed, forCpu, rules, humanRank);
     const entry = this.prefetched.get(key)!;
     const listener = this.pending.get(entry.id);
-    if (listener) listener.onProgress = onProgress;
+    if (listener) {
+      listener.onProgress = onProgress;
+      listener.onLoading = onLoading;
+      if (listener.loading) onLoading?.();
+    }
     this.taking.add(entry.id);
     try {
       return await entry.promise;
@@ -84,11 +101,22 @@ export class GameGenerator {
     seed: number,
     forCpu: boolean,
     rules: ShapeRules,
+    humanRank: string | null,
   ): Promise<GeneratedGame> {
     const worker = this.ensureWorker();
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      worker.postMessage({ type: "generate", id, size, seed, forCpu, rules, modelUrl: modelUrl() } satisfies WorkerRequest);
+      worker.postMessage({
+        type: "generate",
+        id,
+        size,
+        seed,
+        forCpu,
+        rules,
+        modelUrl: modelUrl(),
+        humanRank,
+        humanModelUrl: modelUrl(HUMAN_MODEL_PATH),
+      } satisfies WorkerRequest);
     });
   }
 
@@ -100,7 +128,13 @@ export class GameGenerator {
       const entry = this.pending.get(msg.id);
       if (!entry) return;
       if (msg.type === "progress") {
+        entry.loading = false;
         entry.onProgress?.(msg.move);
+        return;
+      }
+      if (msg.type === "loading") {
+        entry.loading = true;
+        entry.onLoading?.();
         return;
       }
       this.pending.delete(msg.id);
@@ -124,11 +158,11 @@ function deserialize(game: SerializedGame): GeneratedGame {
 }
 
 /** ネットワークの絶対 URL。Worker からは相対パスが解決できないので、ページ側で作る。 */
-function modelUrl(): string {
-  return new URL(`${import.meta.env.BASE_URL}${MODEL_PATH}`, document.baseURI).href;
+function modelUrl(path = MODEL_PATH): string {
+  return new URL(`${import.meta.env.BASE_URL}${path}`, document.baseURI).href;
 }
 
-/** 先読みの見分け: 盤のサイズ・シード・整地の形のルールが同じなら同じ局面になる。 */
-function cacheKey(size: number, seed: number, forCpu: boolean, rules: ShapeRules): string {
-  return `${size}:${seed}:${forCpu}:${rules.oneLineFrom ?? "-"}:${rules.allowFiveByOdd}`;
+/** 先読みの見分け: 盤のサイズ・シード・整地の形のルール・打ち手の棋力が同じなら同じ局面になる。 */
+function cacheKey(size: number, seed: number, forCpu: boolean, rules: ShapeRules, humanRank: string | null): string {
+  return `${size}:${seed}:${forCpu}:${rules.oneLineFrom ?? "-"}:${rules.allowFiveByOdd}:${humanRank ?? "-"}`;
 }

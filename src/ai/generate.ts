@@ -42,6 +42,11 @@ export interface GenerateOptions {
   forCpu?: boolean;
   /** 整地の形の追加ルール（forCpu で形を探すときに使う）。 */
   rules?: ShapeRules;
+  /**
+   * 本局の手を選ぶ方策（Human SL ネットワーク）。指定すると、その棋力の人が打ちそうな手をそのままの確率で選ぶ。
+   * 形勢判断・後始末・死活の判定は、これまでどおり evaluate で行う。
+   */
+  human?: Evaluator;
 }
 
 export class GenerationCancelled extends Error {
@@ -102,7 +107,15 @@ async function selfPlay(evaluate: Evaluator, options: GenerateOptions): Promise<
   const step = async (area: boolean) => {
     if (options.shouldStop?.()) throw new GenerationCancelled();
     const ev = await evaluate(game, { area });
-    game.play(area ? chooseCleanupMove(game, ev, random) : await chooseMove(game, ev, random, targetMargin, evaluate));
+    if (area) {
+      game.play(chooseCleanupMove(game, ev, random));
+    } else if (options.human) {
+      // 手の候補は Human SL の方策、形勢と地の判断は evaluate の結果を使う
+      const human = await options.human(game);
+      game.play(await chooseMove(game, { ...ev, policy: human.policy }, random, targetMargin, evaluate, true));
+    } else {
+      game.play(await chooseMove(game, ev, random, targetMargin, evaluate));
+    }
     options.onMove?.(game.moves.length);
   };
 
@@ -127,6 +140,8 @@ async function selfPlay(evaluate: Evaluator, options: GenerateOptions): Promise<
 /**
  * 本局の手を選ぶ。普段は方策からサンプリングする。
  * 目数差が開いたら、方策の上位候補を 1 手先まで評価して、差が縮まる手を選ぶ。
+ *
+ * @param human 方策が Human SL のもの。人の手の確率をなるべくそのまま使う（温度 1）。
  */
 async function chooseMove(
   game: GoGame,
@@ -134,6 +149,7 @@ async function chooseMove(
   random: () => number,
   targetMargin: number,
   evaluate: Evaluator,
+  human = false,
 ): Promise<number> {
   const area = game.size * game.size;
   const moveNumber = game.moves.length;
@@ -145,6 +161,8 @@ async function chooseMove(
   const allowed = (i: number) => sign * ev.ownership[i] < 0.9 || ev.policy[i] > 0.3;
 
   if (Math.abs(lead) <= targetMargin * 0.75) {
+    // その棋力の人が打つ確率のまま選ぶ（ごくまれな手だけは除く）
+    if (human) return sample(game, ev, random, 1.0, 0.97, allowed);
     // 序盤はばらつきを持たせ、中盤以降は堅実に打つ
     const opening = moveNumber < area * 0.1;
     return sample(game, ev, random, opening ? 1.0 : 0.5, opening ? 0.95 : 0.8, allowed);
