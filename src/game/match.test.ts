@@ -124,5 +124,55 @@ describe("対戦（2 人で同じ盤を操作）", () => {
     expect(white.penalties).toBe(0);
     expect(black.penalties).toBe(0);
   });
+
+  describe("対戦の死に石（相手を待たない）", () => {
+    // 黒地 (0..3, 0..4) に白の死に石 (2,1)、白地に黒の死に石 (7,4)
+    const DEAD = `
+      ....xo...
+      ..O.xo...
+      ....xo...
+      ....xo...
+      ....xo.X.
+      xxxxxo...
+      ...xxo...
+      ...xxoooo
+      ...xxo...
+    `;
+    const start = () => {
+      const match = new Match({ board: parseBoard(DEAD), trays: { [BLACK]: 0, [WHITE]: 0 } }, { undoOnPenalty: true });
+      const black = new Player(match, { color: BLACK });
+      const white = new Player(match, { color: WHITE });
+      match.begin();
+      return { match, black, white };
+    };
+
+    it("整地する相手の地の中の自分の死に石を取ると、相手のアゲハマに入り、すぐ整地に進める", () => {
+      const { match, black, white } = start();
+      expect(white.phase).toBe("removal");
+      expect(white.capture(1 * 9 + 2)).toBe(true); // 白が黒地の中の白の死に石を取る
+      expect(match.position.trays[BLACK]).toBe(1); // 黒のアゲハマ
+      expect(white.phase).toBe("arrange");
+      expect(white.penalties).toBe(0);
+      expect(black.phase).toBe("removal"); // 黒は白地の中の黒の死に石がまだある
+      // 盤に死に石が残っている間は完了できない
+      expect(white.complete({ [BLACK]: match.initialScores[BLACK] }).ok).toBe(false);
+    });
+
+    it("拾った自分の死に石は、色の指定によらず先に出る（スタック）。相手が整地する地に置ける", () => {
+      const { match, black } = start();
+      const whiteStone = 0 * 9 + 5;
+      // 黒が白石を持ってから、白地の中の黒の死に石を拾う
+      expect(black.pickUp([whiteStone, 4 * 9 + 7])).toBe(true);
+      // 白を指定しても、拾った黒の死に石が先に出る。黒地（白が整地する地）に置く
+      expect(black.placeAt(0 * 9 + 0, WHITE)).toBe(true);
+      expect(match.board.get(0, 0)).toBe(BLACK);
+      expect(match.board.isDead(0, 0)).toBe(false);
+      expect(black.phase).toBe("arrange");
+      // 残りの白石を元に戻す。目数は変わらないのでペナルティなし
+      expect(black.placeAt(whiteStone, WHITE)).toBe(true);
+      expect(black.penalties).toBe(0);
+      expect(match.scores()).toEqual(match.initialScores);
+    });
+  });
 });
 

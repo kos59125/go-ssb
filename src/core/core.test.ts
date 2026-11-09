@@ -367,12 +367,13 @@ describe("isRemovalDone", () => {
     .....xo..
   `);
 
-  it("自分の地の中の相手の死に石だけを見る", () => {
+  it("自分が整地する相手の地の中の、自分の死に石だけを見る（相手を待たない）", () => {
     expect(isRemovalDone(board, BLACK)).toBe(false);
     expect(isRemovalDone(board, WHITE)).toBe(false);
+    // 黒地の中の白の死に石 (2,0) がなくなると、白は整地を始められる（黒は白地の中の黒の死に石が残っている）
     board.set(2, 0, 0);
-    expect(isRemovalDone(board, BLACK)).toBe(true);
-    expect(isRemovalDone(board, WHITE)).toBe(false);
+    expect(isRemovalDone(board, WHITE)).toBe(true);
+    expect(isRemovalDone(board, BLACK)).toBe(false);
   });
 
   it("色を省略するとすべての死に石を見る", () => {

@@ -1,4 +1,5 @@
 import { h } from "./dom";
+import { shareOnX, xShareText } from "./share";
 import { GameRecorder, MAX_VIDEO_MS, VideoFile, canRecordVideo, canShareVideo, fitsVideo, makeVideo, shareOrSaveVideo } from "./recorder";
 
 /**
@@ -40,16 +41,19 @@ export function openVideoDialog(root: HTMLElement, recorder: GameRecorder, resul
       status.after(preview);
       const save = h("button", { type: "button" }, ["保存"]);
       save.addEventListener("click", () => void shareOrSaveVideo(video, shareText, false));
-      buttons.prepend(save);
-      if (canShareVideo(video.extension)) {
-        const share = h("button", { type: "button", class: "primary" }, ["共有"]);
-        share.addEventListener("click", () => {
-          shareOrSaveVideo(video, shareText, true).catch(() => {
+      // X でシェア: スマートフォンでは共有シートで動画と文を送る（X を選ぶ）。動画を送れない環境では、
+      // 動画を保存してから X の投稿画面を開く（保存した動画を添付してもらう）
+      const share = h("button", { type: "button", class: "share-x" }, ["X でシェア"]);
+      share.addEventListener("click", () => {
+        if (canShareVideo(video.extension)) {
+          shareOrSaveVideo(video, xShareText(shareText), true).catch(() => {
             // 共有シートを閉じただけなら何もしない
           });
-        });
-        buttons.prepend(share);
-      }
+        } else {
+          void shareOrSaveVideo(video, shareText, false).then(() => shareOnX(shareText));
+        }
+      });
+      buttons.prepend(share, save);
     })
     .catch((err) => {
       if (cancelled) return;

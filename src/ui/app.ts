@@ -17,7 +17,7 @@ import { TRAY_SLOTS } from "./trayView";
 import { formatTime, h, makeCursor, trayElement } from "./dom";
 import { CpuCursorDriver } from "./cpuDriver";
 import { showWatch } from "./watch";
-import { GameRecorder, RecordedCursor } from "./recorder";
+import { GameRecorder, RecordedClock, RecordedCursor } from "./recorder";
 import { videoButton } from "./videoDialog";
 import { CpuRecord, CpuResult, SoloRecord, addCpuRecord, addSoloRecord, loadScores, soloRanking } from "./scores";
 import { shareOnX } from "./share";
@@ -513,6 +513,14 @@ function showGame(
   const view = new BoardView(settings.size, cpuMode && myColor === WHITE);
   // 対局のようすを記録して、終わったら動画にできるようにする（盤の向きは黒番から見たものにそろえる）
   const recorder = new GameRecorder(settings.size, cpuMode && myColor === WHITE);
+  /** 記録するタイマー: ひとりでは 1 つ、vs CPU では黒・白それぞれ（完了した方はそこで止める）。 */
+  const recordedClocks = (): RecordedClock[] => {
+    const running = (p: Player) => p.phase !== "finished" && gaveUpAt === null && !decided;
+    if (!cpuPlayer) return [{ label: "タイム", ms: session.elapsed(), running: running(session) }];
+    const byColor = (c: Color) => (c === myColor ? session : cpuPlayer);
+    const label = (c: Color) => `${colorName(c)}（${c === myColor ? "あなた" : "CPU"}）`;
+    return ([BLACK, WHITE] as const).map((c) => ({ label: label(c), ms: byColor(c).elapsed(), running: running(byColor(c)) }));
+  };
   /** 記録する CPU（とおまかせ）のカーソル。CPU の準備ができたら差し替える。 */
   let recordedCursors: () => RecordedCursor[] = () => [];
   const colorName = (c: Color) => (c === BLACK ? "黒" : "白");
@@ -633,12 +641,11 @@ function showGame(
       trays: session.position.trays,
       marks: session.marks,
       cursors: recordedCursors(),
-      clock: session.elapsed(),
-      running: session.phase !== "finished" && gaveUpAt === null && !decided,
+      clocks: recordedClocks(),
     });
     if (session.phase !== "finished" && gaveUpAt === null) {
       const removal = cpuMode
-        ? `① 死に石取り：自分の地（${colorName(myColor)}地）の中の死に石をアゲハマへ（残り ${countDeadStones(session)} 個）`
+        ? `① 死に石取り：${colorName(cpuColor)}地の中の自分（${colorName(myColor)}）の死に石を${colorName(cpuColor)}のアゲハマへ（残り ${countDeadStones(session)} 個）`
         : `① 死に石取り：死に石をアゲハマトレイへ（残り ${countDeadStones(session)} 個）`;
       const arrange = cpuMode
         ? `② 整地：${colorName(cpuColor)}地にアゲハマを埋めて整える`
@@ -720,8 +727,8 @@ function showGame(
   };
 
   const dropToTray = (owner: Color) => {
-    if (!session.canUseTray(owner)) {
-      notice("CPU のアゲハマは使えません。");
+    if (!session.canDropTo(owner)) {
+      notice("CPU のアゲハマに入れられるのは、拾った自分の死に石だけです。");
       return;
     }
     if (!session.hand || session.dropToTray(owner)) return;
@@ -826,10 +833,11 @@ function showGame(
       } else if (i === drag.start) {
         // 死に石取りの間は、クリックした石をそのままアゲハマトレイへ
         if (session.board.cells[i] !== EMPTY) {
-          if (session.phase === "removal") {
+          if (session.phase === "removal" || session.board.dead[i] === 1) {
+            // 死に石取りの間と、整地に入ってから残っている死に石は、クリックでそのままアゲハマへ
             if (session.match.sekiPoints.has(i)) sekiNotice();
             if (!session.capture(i) && cpuMode && session.board.cells[i] === myColor) {
-              notice(`死に石取りで取るのは、自分の地の中の${colorName(cpuColor)}の死に石です。`);
+              notice(`取れる死に石は、${colorName(cpuColor)}地の中の自分（${colorName(myColor)}）の死に石と、自分の地の中の${colorName(cpuColor)}の死に石です。`);
             }
           } else pickUp([i]);
         } else if (session.hand) place(i, color);
@@ -844,7 +852,9 @@ function showGame(
       const count = session.position.trays[owner];
       trayView.showSelection(null, null);
       if (!session.canUseTray(owner)) {
-        notice("CPU のアゲハマは使えません。");
+        // 相手のトレイには、拾った自分の死に石だけ入れられる
+        if (session.canDropTo(owner)) dropToTray(owner);
+        else notice("CPU のアゲハマに入れられるのは、拾った自分の死に石だけです。");
       } else if (tray === owner && start >= 0 && drag.current !== start) {
         // トレイの中で範囲選択
         const n = trayView.countInRect(start, drag.current, count);
@@ -1375,10 +1385,10 @@ function countDeadStones(session: Player): number {
   if (session.color === null) {
     onBoard = board.dead.reduce((n, d) => n + d, 0);
   } else {
-    // 対戦: 自分の地の中の相手の死に石だけ
+    // 対戦: 自分が整地する相手の地の中の、自分の死に石だけ（自分で取ると、すぐ整地に進める）
     const { regions, regionOf } = analyze(board);
     for (let i = 0; i < board.cells.length; i++) {
-      if (board.dead[i] === 1 && board.cells[i] !== session.color && regions[regionOf[i]].owner === session.color) onBoard++;
+      if (board.dead[i] === 1 && board.cells[i] === session.color && regions[regionOf[i]].owner === opponent(session.color)) onBoard++;
     }
   }
   return onBoard + (session.hand?.stones.filter((s) => s.dead).length ?? 0);
@@ -1508,7 +1518,7 @@ function showScoreboard(root: HTMLElement, size: number, tab: "solo" | "cpu"): v
     return button;
   };
   const shareButton = (text: string) => {
-    const button = h("button", { type: "button", class: "share-x" }, ["シェア"]);
+    const button = h("button", { type: "button", class: "share-x" }, ["X でシェア"]);
     button.addEventListener("click", () => shareOnX(text));
     return button;
   };

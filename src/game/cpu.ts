@@ -116,6 +116,8 @@ export class Cpu {
   readonly player: Player;
   /** 担当する地の色ごとの計画。 */
   private readonly layouts = new Map<Color, Layout | null>();
+  /** 計画を立てたときのアゲハマの数（持っている分を含む）。 */
+  private readonly prisonersFor = new Map<Color, number>();
   private readonly profile: CpuProfile;
   private readonly random: () => number;
   /** 無駄な操作で持った石を、計画と関係なく置く（すぐ戻す）か。 */
@@ -172,6 +174,29 @@ export class Cpu {
 
   private pickRandom<T>(xs: T[]): T {
     return xs[Math.floor(this.random() * xs.length)];
+  }
+
+  /**
+   * 取れる死に石（where に合う点）を 1 個取る操作。自分の色の死に石は相手のアゲハマへ、
+   * 相手の色の死に石は自分のアゲハマへ入る（Player.capture）。なければ null。
+   */
+  private capturable(where: (i: number) => boolean): CpuPlan | null {
+    const p = this.player;
+    const board = p.board;
+    const points: number[] = [];
+    for (let i = 0; i < board.cells.length; i++) {
+      if (board.dead[i] === 1 && where(i) && p.canPick(i) && !p.match.sekiPoints.has(i)) points.push(i);
+    }
+    if (points.length === 0) return null;
+    const point = this.cursor !== null ? nearest(points, this.cursor, board.size) : points[0];
+    return {
+      action: { kind: "capture", point },
+      run: () => {
+        if (!p.capture(point)) return false;
+        this.cursor = point;
+        return true;
+      },
+    };
   }
 
   /** 担当の地（計画の範囲）の点。 */
@@ -242,7 +267,8 @@ export class Cpu {
     const targets: number[] = [];
     for (let i = 0; i < p.board.cells.length; i++) {
       if (p.board.dead[i] !== 1) continue;
-      if (p.color !== null && (p.board.cells[i] === p.color || regions[regionOf[i]].owner !== p.color)) continue;
+      // 対戦: 自分が整地する相手の地の中の、自分の死に石を取って相手のアゲハマへ（相手を待たずに整地を始める）
+      if (p.color !== null && !(p.board.cells[i] === p.color && regions[regionOf[i]].owner === opponent(p.color))) continue;
       targets.push(i);
     }
     // 効率よく動かすときは、直前に取った点から近い順に取る
@@ -273,13 +299,11 @@ export class Cpu {
 
   private arrange(): CpuPlan {
     const p = this.player;
-    const board = p.board;
-    const { regions, regionOf } = analyze(board);
+    // 盤に残っている死に石は、先に取る（相手が取るのを待たない）。担当の地の中の自分の死に石は相手の
+    // アゲハマへ、自分の地の中の相手の死に石は自分のアゲハマになり、整地の形（埋める数）が決まる
+    const dead = this.capturable(() => true);
+    if (dead) return dead;
     for (const color of p.assigned) {
-      // 担当の地に、相手が取り上げる死に石が残っている間は待つ
-      for (let i = 0; i < board.cells.length; i++) {
-        if (board.dead[i] === 1 && regions[regionOf[i]].owner === color) return IDLE;
-      }
       const plan = this.validPlan(color);
       if (!plan) return IDLE;
       const { sinks, sources } = this.diff(plan);
@@ -332,6 +356,11 @@ export class Cpu {
         return IDLE;
       }
     }
+
+    // 盤に死に石が残っていれば、まだアゲハマが増えるので、取ってから完了する
+    const leftover = this.capturable(() => true);
+    if (leftover) return leftover;
+    if (p.color !== null && p.board.dead.some((d) => d === 1)) return IDLE;
 
     // すべての担当の地の形が整った: 境界が閉じていて目数も正しければ完了する
     const scores = p.scores();
@@ -458,12 +487,15 @@ export class Cpu {
         );
       });
     const current = this.layouts.get(color);
-    if (current && usable(current)) return current;
     const held = this.player.hand?.stones.filter((s) => s.color === color).length ?? 0;
+    const prisoners = this.player.position.trays[opponent(color)] + held;
+    // アゲハマの数が変わったら（相手が死に石を取ってトレイに入れたなど）、埋める数が変わるので立て直す
+    if (current && usable(current) && this.prisonersFor.get(color) === prisoners) return current;
+    this.prisonersFor.set(color, prisoners);
     const layout = planLayout(
       board,
       color,
-      this.player.position.trays[opponent(color)] + held,
+      prisoners,
       this.profile.optimize ? 60_000 : 20_000,
       this.player.match.shapeRules,
       this.profile.optimize,

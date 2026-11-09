@@ -6,7 +6,8 @@ import { SITE_URL } from "./share";
  *
  * 対局中は、盤・アゲハマ・印・CPU のカーソル・タイマーが変わったときだけ、その状態を時刻付きで記録する。
  * 終わったら、その記録を canvas に描き直しながら MediaRecorder で録画する（ブラウザーの中だけで作る）。
- * 映すのは碁盤とアゲハマだけで、タイムを左上に重ね、最後に結果を重ねる。早送りはせず、
+ * 映すのは碁盤とアゲハマだけ。タイム（黒・白それぞれ、先に終わった方はそこで止める）は碁盤の上の帯に出し、
+ * 最後に結果を重ねる。早送りはせず、
  * 動画は最大 5 分（それより長い対局は動画にしない）。
  */
 
@@ -19,8 +20,14 @@ interface Snapshot {
   marks: number[];
   /** CPU のカーソル（盤の点）。 */
   cursors: { label: string; color: string; point: number }[];
-  /** 画面のタイマーの値（ミリ秒）と、進んでいるか。 */
-  clock: number;
+  /** タイマー（黒・白それぞれ。ひとりでは 1 つ）。 */
+  clocks: RecordedClock[];
+}
+
+/** 記録するタイマー。ms はその時点の値（ペナルティ込み）、running は進んでいるか（完了したら止まる）。 */
+export interface RecordedClock {
+  label: string;
+  ms: number;
   running: boolean;
 }
 
@@ -53,8 +60,7 @@ export class GameRecorder {
     trays: Record<Color, number>;
     marks: Iterable<number>;
     cursors: RecordedCursor[];
-    clock: number;
-    running: boolean;
+    clocks: RecordedClock[];
   }): void {
     if (!state.started) return;
     const now = performance.now();
@@ -69,7 +75,7 @@ export class GameRecorder {
     const marks = [...state.marks].map(flip);
     const key = `${cells.join("")}|${state.trays[BLACK]},${state.trays[WHITE]}|${marks.join(",")}|${cursors
       .map((c) => c.point)
-      .join(",")}|${state.running}|${state.running ? "" : state.clock}`;
+      .join(",")}|${state.clocks.map((c) => (c.running ? "r" : c.ms)).join(",")}`;
     // タイマーだけが進んでいるときは記録しない（再生時に時刻から計算する）
     if (key === this.last) return;
     this.last = key;
@@ -79,8 +85,7 @@ export class GameRecorder {
       trays: { ...state.trays },
       marks,
       cursors,
-      clock: state.clock,
-      running: state.running,
+      clocks: state.clocks.map((c) => ({ ...c })),
     });
   }
 
@@ -118,10 +123,11 @@ export interface VideoFile {
 }
 
 const WIDTH = 720;
-/** 碁盤（正方形）とアゲハマの帯。 */
+/** 上のタイムの帯、碁盤（正方形）、下のアゲハマの帯。 */
+const TOP_H = 64;
 const BOARD = WIDTH;
 const TRAY_H = 80;
-const HEIGHT = BOARD + TRAY_H;
+const HEIGHT = TOP_H + BOARD + TRAY_H;
 const FPS = 30;
 /** 最後に結果を出す長さ。 */
 const END_MS = 3000;
@@ -207,19 +213,26 @@ function draw(ctx: CanvasRenderingContext2D, recorder: GameRecorder, t: number, 
   drawBoard(ctx, recorder.size, snap);
   if (snap) drawTrays(ctx, snap.trays);
 
-  // タイムを左上に重ねる
-  if (snap && !ending) {
-    const clock = snap.running ? snap.clock + (t - snap.t) : snap.clock;
-    ctx.font = "bold 34px ui-monospace, 'SF Mono', Menlo, monospace";
-    const text = formatClock(clock);
-    const w = ctx.measureText(text).width + 24;
-    ctx.fillStyle = "rgba(30, 25, 20, 0.7)";
-    ctx.beginPath();
-    ctx.roundRect(10, 10, w, 46, 10);
-    ctx.fill();
-    ctx.fillStyle = "#fff";
+  // タイムは碁盤の上の帯に（黒は左、白は右。ひとりでは左だけ）。完了した方はそこで止まる
+  if (snap) {
+    ctx.fillStyle = "#2b2620";
+    ctx.fillRect(0, 0, WIDTH, TOP_H);
     ctx.textBaseline = "middle";
-    ctx.fillText(text, 22, 34);
+    snap.clocks.forEach((c, k) => {
+      const ms = c.running ? c.ms + (t - snap.t) : c.ms;
+      const right = k === 1;
+      ctx.textAlign = right ? "right" : "left";
+      const x = right ? WIDTH - 20 : 20;
+      ctx.font = "22px 'Hiragino Sans', 'Noto Sans JP', sans-serif";
+      ctx.fillStyle = "#d8cfc2";
+      const label = c.label;
+      ctx.fillText(label, x, TOP_H / 2);
+      const lw = ctx.measureText(label).width + 12;
+      ctx.font = "bold 34px ui-monospace, 'SF Mono', Menlo, monospace";
+      ctx.fillStyle = c.running ? "#ffffff" : "#ffd23f";
+      ctx.fillText(formatClock(ms), right ? x - lw : x + lw, TOP_H / 2);
+    });
+    ctx.textAlign = "left";
     ctx.textBaseline = "top";
   }
 
@@ -246,7 +259,7 @@ function draw(ctx: CanvasRenderingContext2D, recorder: GameRecorder, t: number, 
 }
 
 const BOARD_X = 0;
-const BOARD_Y = 0;
+const BOARD_Y = TOP_H;
 
 function drawBoard(ctx: CanvasRenderingContext2D, size: number, snap: Snapshot | null): void {
   ctx.fillStyle = "#dcb35c";
@@ -315,7 +328,7 @@ function drawBoard(ctx: CanvasRenderingContext2D, size: number, snap: Snapshot |
 }
 
 function drawTrays(ctx: CanvasRenderingContext2D, trays: Record<Color, number>): void {
-  const y = BOARD + (TRAY_H - 28) / 2;
+  const y = TOP_H + BOARD + (TRAY_H - 28) / 2;
   ctx.font = "22px 'Hiragino Sans', 'Noto Sans JP', sans-serif";
   ctx.textBaseline = "middle";
   const items: [string, Color, number][] = [

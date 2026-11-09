@@ -10,8 +10,7 @@ const state = (cells: number[], extra: Partial<Parameters<GameRecorder["capture"
   trays: { [BLACK]: 0, [WHITE]: 0 },
   marks: [],
   cursors: [],
-  clock: 0,
-  running: true,
+  clocks: [{ label: "タイム", ms: 0, running: true }],
   ...extra,
 });
 

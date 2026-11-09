@@ -12,3 +12,8 @@ export function xShareUrl(text: string): string {
 export function shareOnX(text: string): void {
   window.open(xShareUrl(text), "_blank", "noopener,noreferrer");
 }
+
+/** 共有シートで送る文（X の投稿画面と同じく、本文・URL・ハッシュタグ）。 */
+export function xShareText(text: string): string {
+  return `${text}\n${SITE_URL}\n#${HASHTAG}`;
+}

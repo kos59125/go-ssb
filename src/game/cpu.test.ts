@@ -36,15 +36,13 @@ function setup(humanColor: typeof BLACK | typeof WHITE, level?: CpuLevel, seed =
 }
 
 describe("Cpu", () => {
-  it("死に石を取り、相手の死に石が取られるのを待ってから整地して完了する", () => {
-    const { human, cpuPlayer, cpu } = setup(BLACK);
-    // CPU（白）は自分の地の中の黒の死に石 (8,8) を取る
-    expect(cpu.step()).toEqual({ kind: "capture", point: 8 * 11 + 8 });
+  it("相手を待たずに、整地する地の中の自分の死に石を取って整地を始め、完了する", () => {
+    const { human, cpuPlayer, cpu, match } = setup(BLACK);
+    // CPU（白）は、整地する黒地の中の自分（白）の死に石 (1,1) を取って、黒のアゲハマに入れる
+    expect(cpu.step()).toEqual({ kind: "capture", point: 1 * 11 + 1 });
+    expect(match.position.trays[BLACK]).toBe(5);
     expect(cpuPlayer.phase).toBe("arrange");
-    // 担当の黒地に白の死に石 (1,1) が残っている間は待つ
-    expect(cpu.step()).toEqual({ kind: "idle" });
-    // 人（黒）が白の死に石を取る
-    expect(human.capture(1 * 11 + 1)).toBe(true);
+    // 人は何もしなくても、CPU は白地の中の黒の死に石も自分で取って進める
 
     let steps = 0;
     while (cpuPlayer.phase !== "finished" && steps < 200) {

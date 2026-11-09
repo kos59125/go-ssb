@@ -17,6 +17,11 @@ export interface HeldStone {
   source: Source;
   /** 間違いの印が付いていた石か。 */
   marked?: boolean;
+  /**
+   * 対戦で拾った自分の死に石（本来は相手が取る石）。持ち続けて相手の邪魔をできないよう、
+   * 置くとき・トレイに入れるときは、色の指定によらずこの石から出す（後に拾ったものから）。
+   */
+  forced?: boolean;
 }
 
 /** 石を 1 個動かした記録。ペナルティで元に戻すときは逆順にたどる。 */
@@ -347,6 +352,19 @@ export class Player {
     return this.color === null || owner === this.color;
   }
 
+  /** 持っている自分の死に石（対戦）があるか。 */
+  get holdingForced(): boolean {
+    return this.hand?.stones.some((s) => s.forced) ?? false;
+  }
+
+  /**
+   * このトレイに石を入れられるか。自分のトレイのほか、対戦で拾った自分の死に石は
+   * 相手のトレイ（相手のアゲハマ）に入れられる。
+   */
+  canDropTo(owner: Color): boolean {
+    return this.canUseTray(owner) || (this.color !== null && owner === opponent(this.color) && this.holdingForced);
+  }
+
   /**
    * 盤上のこの石を持てるか。担当外の石の操作を制限する設定のときは、担当の地（相手の地）の
    * 整地に関わる石だけ: 相手の色の石と、相手の石（または担当の地）に接している自分の色の石
@@ -365,7 +383,10 @@ export class Player {
   /** この点に置けるか（制限する設定のとき、自分の地（相手が整地する地）には置けない）。 */
   canPlace(i: number): boolean {
     if (this.board.cells[i] !== EMPTY) return false;
-    return !this.restricted || this.color === null || this.match.settledOwner[i] !== this.color;
+    if (!this.restricted || this.color === null) return true;
+    // 拾った自分の死に石は、相手が整地する地（自分の地）に入れる
+    if (this.holdingForced) return this.match.settledOwner[i] === this.color;
+    return this.match.settledOwner[i] !== this.color;
   }
 
   clearRejected(): void {
@@ -405,11 +426,14 @@ export class Player {
     const hand = this.ensureHand();
     for (const i of stones) {
       const marked = this.marks.delete(i);
+      const color = this.board.cells[i] as Color;
+      const dead = this.board.dead[i] === 1;
       hand.stones.push({
-        color: this.board.cells[i] as Color,
-        dead: this.board.dead[i] === 1,
+        color,
+        dead,
         source: { kind: "board", point: i },
         marked,
+        forced: this.color !== null && color === this.color && dead,
       });
       hand.origins.push(i);
       if (marked) hand.carriedMark = true;
@@ -425,11 +449,12 @@ export class Player {
    * 死に石でなければ、手が空になった時点の判定でペナルティになり元に戻る。
    */
   capture(i: number): boolean {
-    if (this.phase !== "removal") return false;
-    // 対戦では自分のトレイにしか入れられないので、自分の色の石は取れない
-    if (this.color !== null && this.board.cells[i] === this.color) return false;
+    // 整地に入ってからも、残っている死に石は取れる（死に石取りの間は、死に石でなければペナルティ）
+    if (this.phase === "finished" || (this.phase === "arrange" && this.board.dead[i] !== 1)) return false;
+    // 対戦で自分の色の石を取るのは、相手の地の中の自分の死に石を相手のアゲハマへ入れるときだけ
+    if (this.color !== null && this.board.cells[i] === this.color && this.board.dead[i] !== 1) return false;
     if (!this.pickUp([i])) return false;
-    for (const owner of [BLACK, WHITE] as const) if (this.canUseTray(owner)) this.dropToTray(owner, Infinity);
+    for (const owner of [BLACK, WHITE] as const) if (this.canDropTo(owner)) this.dropToTray(owner, Infinity);
     return true;
   }
 
@@ -480,7 +505,9 @@ export class Player {
    */
   placeAt(i: number, color?: Color): boolean {
     const hand = this.hand;
-    if (!hand || this.phase !== "arrange" || !this.canPlace(i)) return false;
+    if (!hand || this.phase === "finished" || !this.canPlace(i)) return false;
+    // 死に石取りの間に盤へ置けるのは、拾った自分の死に石（相手が整地する地へ入れる）だけ
+    if (this.phase === "removal" && !this.holdingForced) return false;
     if (this.match.sekiPoints.has(i)) {
       // セキの中（共有の呼吸点・セキの眼）には置けない: ペナルティにして、石は持ったまま
       const stone = hand.stones.find((s) => color === undefined || s.color === color) ?? hand.stones[0];
@@ -490,12 +517,21 @@ export class Player {
     const own = hand.stones.findIndex(
       (s) => s.source.kind === "board" && s.source.point === i && (color === undefined || s.color === color),
     );
-    const k = own >= 0 ? own : Math.max(0, hand.stones.findIndex((s) => s.color === color));
+    // 拾った自分の死に石があれば、色の指定によらず、後に拾ったものから出す（スタック）
+    let forced = -1;
+    hand.stones.forEach((s, j) => {
+      if (s.forced) forced = j;
+    });
+    const k = forced >= 0 ? forced : own >= 0 ? own : Math.max(0, hand.stones.findIndex((s) => s.color === color));
     const [stone] = hand.stones.splice(k, 1);
     const { x, y } = this.board.point(i);
-    this.board.set(x, y, stone.color, stone.dead);
+    // 拾った自分の死に石は、相手が整地する地を埋める石として置く（生きた石）
+    const dead = stone.forced ? false : stone.dead;
+    this.board.set(x, y, stone.color, dead);
     hand.placed.push(i);
     hand.moves.push({ color: stone.color, dead: stone.dead, from: stone.source, to: { kind: "board", point: i } });
+    // 整地する地の死に石がなくなったら、そのまま整地に進む（持っている残りの石も置けるように）
+    if (stone.forced) this.updatePhase();
     // アゲハマと、間違いの印が付いていた石は、相手の地に置いたらその場で判定する
     if (stone.source.kind === "tray" || stone.marked) hand.placedPrisoners.push(i);
     if (hand.stones.length === 0) {
@@ -511,14 +547,16 @@ export class Player {
    */
   dropToTray(owner: Color, count = 1): boolean {
     const hand = this.hand;
-    if (!hand || !this.canUseTray(owner)) return false;
+    if (!hand || !this.canDropTo(owner)) return false;
     const color = opponent(owner);
+    // 相手のトレイに入れられるのは、拾った自分の死に石だけ
+    const onlyForced = !this.canUseTray(owner);
     // 死に石取りでは死に石かどうかを手が空になった時点で判定するので、ここでは制限しない
     const room = this.phase === "removal" ? Infinity : this.trayCapacity[owner] - this.position.trays[owner];
     const limit = Math.min(count, room);
     let moved = 0;
     hand.stones = hand.stones.filter((s) => {
-      if (moved >= limit || s.color !== color) return true;
+      if (moved >= limit || s.color !== color || (onlyForced && !s.forced)) return true;
       moved++;
       hand.moves.push({ color: s.color, dead: s.dead, from: s.source, to: { kind: "tray", owner } });
       return false;
@@ -541,6 +579,8 @@ export class Player {
     const problems: string[] = [];
     if (this.hand) problems.push("石を持っている");
     if (this.phase === "removal") problems.push("死に石が残っている");
+    // 対戦では、盤に死に石が残っていれば、まだアゲハマが増える（全部取り上げてから完了する）
+    else if (this.color !== null && this.board.dead.some((d) => d === 1)) problems.push("取り上げていない死に石がある");
     const scores = this.scores();
     if (this.boundaryOpen) problems.push("境界が開いている");
     else if (!sameScores(scores, this.initialScores)) problems.push("間違えて置いた石がある");

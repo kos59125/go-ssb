@@ -119,8 +119,11 @@ export function showWatch(
         color: sides[k] === BLACK ? "#2b2620" : "#2f5d8a",
         point: d.point,
       })),
-      clock: clock(),
-      running: match.started && !bothFinished(),
+      clocks: sides.map((c) => ({
+        label: `${colorName(c)} CPU`,
+        ms: players[c].elapsed(),
+        running: match.started && players[c].phase !== "finished",
+      })),
     });
     for (const c of sides) {
       trays[c].view.render(match.position.trays[c]);

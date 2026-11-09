@@ -44,7 +44,8 @@ export function checkTerritory(
 /**
  * 死に石取りのフェーズが終わったか（仕様書 §3.2）。
  *
- * @param color 自分の色。自分の地の中にある相手の死に石がなくなれば終わり。
+ * @param color 自分の色。自分が整地する相手の地の中にある自分の死に石がなくなれば終わり
+ *   （相手を待たずに整地を始められる）。
  *   省略すると盤上のすべての死に石が対象（ひとりでモード）。
  */
 export function isRemovalDone(board: Board, color?: Color, analysis: Analysis = analyze(board)): boolean {
@@ -52,7 +53,8 @@ export function isRemovalDone(board: Board, color?: Color, analysis: Analysis = 
     if (board.dead[i] !== 1) continue;
     if (color === undefined) return false;
     const region = analysis.regions[analysis.regionOf[i]];
-    if (board.cells[i] === opponent(color) && region.owner === color) return false;
+    // 対戦: 自分が整地する相手の地の中に、自分の死に石が残っていなければ終わり（自分で取れる）
+    if (board.cells[i] === color && region.owner === opponent(color)) return false;
   }
   return true;
 }
