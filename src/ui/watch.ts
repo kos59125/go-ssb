@@ -96,13 +96,20 @@ export function showWatch(
     if (p.phase === "removal") return `${label(c)}: 死に石取り中${penalty}`;
     return `${label(c)}: ${colorName(c === BLACK ? WHITE : BLACK)}地を整地中${penalty}`;
   };
+  const bothFinished = () => sides.every((c) => players[c].phase === "finished");
+  /** 経過時間。両方が完了したら、後に完了した時点で止める。 */
+  const clock = () => {
+    if (!match.started) return 0;
+    const end = bothFinished() ? Math.max(...sides.map((c) => players[c].finishedAt!)) : match.now();
+    return end - match.startedAt!;
+  };
   const render = () => {
     view.render(match.board, match.marks, [], new Set());
     for (const c of sides) {
       trays[c].view.render(match.position.trays[c]);
       statusLines[c].textContent = stateText(c);
     }
-    timer.textContent = formatTime(match.started ? match.now() - match.startedAt! : 0);
+    timer.textContent = formatTime(clock());
   };
 
   /** 操作の場所の画面座標（盤の点、トレイ。場所がなければ盤の中央）。 */
@@ -185,12 +192,13 @@ export function showWatch(
     for (const c of sides) startCpu(c, drivers[c === BLACK ? 0 : 1]);
   }, 1000);
   timers.push(countdownTimer);
-  timers.push(
-    window.setInterval(() => {
-      render();
-      if (match.started) decide();
-    }, 100),
-  );
+  const tick = window.setInterval(() => {
+    render();
+    if (match.started) decide();
+    // 両方とも完了したら、表示を止める（タイマーも止まる）
+    if (bothFinished()) window.clearInterval(tick);
+  }, 100);
+  timers.push(tick);
 
   function startCpu(c: Color, driver: CpuCursorDriver) {
     let busy = false;
