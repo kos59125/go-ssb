@@ -114,5 +114,30 @@ describe("動かす石の少ない形（強い CPU）", () => {
     expect(count(true)).toBe(0);
     expect(count(true)).toBeLessThanOrEqual(count(false));
   });
+
+  it("余り 9 目は、入るなら 2x4+1 より 3x3 にする", () => {
+    // 3x4 の黒地（12 目）、アゲハマ 3 個 → 9 目
+    const board = regionBoard(3, 4);
+    const l = planLayout(board, BLACK, 3, 60_000, undefined, true)!;
+    expect(sectionShapes(board, l.empties)).toEqual(["3x3:9"]);
+  });
+
+  it("しっぽは長い辺の端に付ける（7 は 1+3+3 でなく 4+3）", () => {
+    // 3 列 x 5 行の黒地（15 目）、アゲハマ 8 個 → 7 目。1x7 は使わない（2 列以上を優先）ので 2x3+1。
+    // しっぽは列を延ばす位置（外接矩形 2x4）で、横に付けた形（外接矩形 3x3）ではない
+    const board = regionBoard(3, 5);
+    const l = planLayout(board, BLACK, 8, 60_000, undefined, true)!;
+    const pts = [...l.empties];
+    const xs = pts.map((i) => i % board.size);
+    const ys = pts.map((i) => Math.floor(i / board.size));
+    expect(pts.length).toBe(7);
+    expect([Math.max(...xs) - Math.min(...xs) + 1, Math.max(...ys) - Math.min(...ys) + 1]).toEqual([2, 4]);
+  });
+
+  it("同じ領域で 9 目なら 3x3", () => {
+    const board = regionBoard(3, 5);
+    const l = planLayout(board, BLACK, 6, 60_000, undefined, true)!;
+    expect(sectionShapes(board, l.empties)).toEqual(["3x3:9"]);
+  });
 });
 

@@ -1,6 +1,5 @@
 import type { GeneratedGame } from "./generate";
 import type { ShapeRules } from "../core/shapes";
-import type { Difficulty } from "./complexity";
 import type { GameRecord } from "./sgf";
 
 /** ページから見たネットワークのパス。Worker からは相対パスが解決できないので、絶対 URL にして渡す。 */
@@ -14,7 +13,6 @@ export type WorkerRequest =
       seed: number;
       forCpu: boolean;
       rules: ShapeRules;
-      difficulty: Difficulty;
       modelUrl: string;
     }
   | {

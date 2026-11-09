@@ -92,9 +92,14 @@ export function planLayout(
 
   // まず 1 列の形を避けて探し、見つからなければ設定で許される範囲で 1 列の形も使う
   const allowed = rules.oneLineFrom ?? Infinity;
-  const passes = allowed > PREFERRED_ONE_LINE_FROM ? [PREFERRED_ONE_LINE_FROM, allowed] : [allowed];
-  for (const oneLineFrom of passes) {
-    const empties = new Solver(board, area, target, maxNodes, oneLineFrom, rules.allowFiveByOdd, optimize).solve();
+  // まずは好ましい形（1 列にしない・しっぽは長い辺の端）だけで探し、なければ設定で許される形すべてで探す
+  const passes = [
+    { oneLineFrom: Math.min(PREFERRED_ONE_LINE_FROM, allowed), endTailsOnly: true },
+    { oneLineFrom: allowed, endTailsOnly: false },
+  ];
+  for (const { oneLineFrom, endTailsOnly } of passes) {
+    const solver = new Solver(board, area, target, maxNodes, oneLineFrom, rules.allowFiveByOdd, optimize, endTailsOnly);
+    const empties = solver.solve();
     if (empties) return { area, empties };
   }
   return null;
@@ -104,6 +109,8 @@ export function planLayout(
 interface Shape {
   cells: [number, number][];
   holes: [number, number][];
+  /** 形の好ましくなさ（optimize のとき、動かす石の数に足す）。しっぽ付きは 1。 */
+  penalty?: number;
 }
 
 class Solver {
@@ -128,6 +135,8 @@ class Solver {
     private readonly fiveByOdd: boolean,
     /** 最初に見つけた形で終わらず、動かす石がいちばん少ない形を探す。 */
     private readonly optimize = false,
+    /** しっぽは長い辺の端（列を 1 つ延ばす位置。2x4+1 なら 5+4）にだけ付ける。 */
+    endTailsOnly = false,
   ) {
     this.n = board.size;
     this.cells = [...area].sort((a, b) => a - b);
@@ -155,7 +164,7 @@ class Solver {
       const shapes: Shape[] = [];
       for (const [w, h] of rectangles(r, max)) if (thinOk || (w > 1 && h > 1)) shapes.push(rect(w, h));
       if (r % 2 === 1 && r >= 3) {
-        for (const [w, h] of rectangles(r - 1, max)) if (thinOk || (w > 1 && h > 1)) shapes.push(...withTail(w, h));
+        for (const [w, h] of rectangles(r - 1, max)) if (thinOk || (w > 1 && h > 1)) shapes.push(...withTail(w, h, endTailsOnly));
       }
       // 2 列以上の形を先に試す
       this.remainders.set(r, shapes.sort((a, b) => Number(isThin(a)) - Number(isThin(b))));
@@ -275,7 +284,7 @@ class Solver {
     }
     for (const i of cells) this.state[i] = 2;
     // 今は石がある点を空点にする数（その石は別の点へ動かす）
-    const cost = cells.filter((i) => this.board.cells[i] !== EMPTY).length;
+    const cost = cells.filter((i) => this.board.cells[i] !== EMPTY).length + (shape.penalty ?? 0);
     for (const j of walls) this.state[j] = 1;
     return { cells, walls, cost };
   }
@@ -325,18 +334,19 @@ function rect(w: number, h: number): Shape {
  * w x h の矩形に、辺に接する 1 マスのしっぽを付けた形（行優先で最初の点が原点）。
  * cells の最後がしっぽ（isThin で使う）。
  */
-function withTail(w: number, h: number): Shape[] {
+function withTail(w: number, h: number, endsOnly = false): Shape[] {
   const result: Shape[] = [];
   const body = rect(w, h).cells;
   const tails: [number, number][] = [];
-  for (let x = 0; x < w; x++) tails.push([x, -1], [x, h]);
-  for (let y = 0; y < h; y++) tails.push([-1, y], [w, y]);
+  // 縦長なら上下（列を延ばす）、横長なら左右（行を延ばす）。正方形はどちらでも
+  if (!endsOnly || h >= w) for (let x = 0; x < w; x++) tails.push([x, -1], [x, h]);
+  if (!endsOnly || w >= h) for (let y = 0; y < h; y++) tails.push([-1, y], [w, y]);
   for (const tail of tails) {
     const cells = [...body, tail];
     const minY = Math.min(...cells.map(([, y]) => y));
     const minX = Math.min(...cells.filter(([, y]) => y === minY).map(([x]) => x));
     // 原点は行優先で最初の点。並びは保ったまま（最後がしっぽ）、原点だけ合わせる
-    result.push({ cells: cells.map(([x, y]) => [x - minX, y - minY]), holes: [] });
+    result.push({ cells: cells.map(([x, y]) => [x - minX, y - minY]), holes: [], penalty: 1 });
   }
   return result;
 }

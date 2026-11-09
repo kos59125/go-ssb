@@ -108,6 +108,7 @@ export function showWatch(
     for (const c of sides) {
       trays[c].view.render(match.position.trays[c]);
       statusLines[c].textContent = stateText(c);
+      if (resultLines) resultLines[c].textContent = stateText(c);
     }
     timer.textContent = formatTime(clock());
   };
@@ -132,6 +133,7 @@ export function showWatch(
 
   // 勝敗: 両方が完了したとき、または先に完了した側のタイムを、もう一方の経過時間が超えた時点
   let decided = false;
+  let resultLines: Record<Color, HTMLParagraphElement> | null = null;
   const decide = () => {
     if (decided) return;
     const [b, w] = [players[BLACK], players[WHITE]];
@@ -154,9 +156,12 @@ export function showWatch(
       leave();
       onBack();
     });
+    // 負けた側も完了まで続けるので、結果の行は render で書き直す（完了したらタイムを出す）
+    resultLines = { [BLACK]: h("p", {}, [stateText(BLACK)]), [WHITE]: h("p", {}, [stateText(WHITE)]) };
     resultBox.replaceChildren(
       h("p", {}, [`黒 ${match.initialScores[BLACK]} 目・白 ${match.initialScores[WHITE]} 目`]),
-      ...sides.map((c) => h("p", {}, [stateText(c)])),
+      resultLines[BLACK],
+      resultLines[WHITE],
       h("div", { class: "buttons" }, [again, back]),
     );
     resultBox.hidden = false;
