@@ -54,17 +54,24 @@ interface Settings {
 
 
 /**
+ * Human SL ネットワークで終局図を作るか（仕様書 §5.2）。false のあいだは従来のネットワーク（kata1-b6c96）
+ * だけで作り、「盤面の難しさ」の設定も出さない。Human SL で作った記録の再プレイは、false でもできる。
+ */
+const HUMAN_SL_ENABLED = false;
+
+/**
  * 盤面の難しさ。終局図を作る自動対局を、Human SL ネットワークにその棋力の人として打たせる（仕様書 §5.2）。
  * 棋力が低いほど地が細かく分かれ、アゲハマも多い（整地の手間が多い）傾向がある。
- * classic は従来のネットワーク（kata1-b6c96）だけで打つ。設定画面には出さない（以前の記録の再プレイ用）。
+ * classic は従来のネットワーク（kata1-b6c96）だけで打つ。
+ * hidden の選択肢は設定画面に出さない（以前の記録の再プレイでは使う）。
  */
 type BoardDifficulty = "easy" | "normal" | "hard" | "classic";
 
-const BOARD_DIFFICULTIES: Record<BoardDifficulty, { label: string; rank: string | null; hidden?: boolean }> = {
-  easy: { label: "かんたん", rank: "1d" },
-  normal: { label: "ふつう", rank: "5k" },
-  hard: { label: "むずかしい", rank: "15k" },
-  classic: { label: "従来", rank: null, hidden: true },
+const BOARD_DIFFICULTIES: Record<BoardDifficulty, { label: string; rank: string | null; hidden: boolean }> = {
+  easy: { label: "かんたん", rank: "1d", hidden: !HUMAN_SL_ENABLED },
+  normal: { label: "ふつう", rank: "5k", hidden: !HUMAN_SL_ENABLED },
+  hard: { label: "むずかしい", rank: "15k", hidden: !HUMAN_SL_ENABLED },
+  classic: { label: "従来", rank: null, hidden: HUMAN_SL_ENABLED },
 };
 
 const humanRank = (settings: Settings) => BOARD_DIFFICULTIES[settings.difficulty].rank;
@@ -148,27 +155,9 @@ function showSettings(root: HTMLElement, settings: Settings): void {
             { value: "katago", label: "自動で作る", checked: !settings.record },
             { value: "sgf", label: "SGF を読み込む", checked: !!settings.record },
           ]),
-          "自動で作る: KataGo の自動対局でその場で作ります。\nSGF を読み込む: 終局済みの実戦の棋譜で遊びます。",
+          `自動で作る: KataGo の自動対局でその場で作ります。初回はネットワーク（約 ${HUMAN_SL_ENABLED ? 29 : 4} MB）を読み込みます。\nSGF を読み込む: 終局済みの実戦の棋譜で遊びます。`,
         ),
-        setting(
-          "盤面の難しさ",
-          radios(
-            "difficulty",
-            (Object.keys(BOARD_DIFFICULTIES) as BoardDifficulty[])
-              .filter((key) => !BOARD_DIFFICULTIES[key].hidden)
-              .map((key) => ({
-                value: key,
-                label: BOARD_DIFFICULTIES[key].label,
-                // 隠している選択肢（以前の記録の再プレイ）のときは既定を選んでおく
-                checked: BOARD_DIFFICULTIES[settings.difficulty].hidden
-                  ? key === defaultSettings().difficulty
-                  : settings.difficulty === key,
-              })),
-          ),
-          "むずかしいほど、地が細かく分かれ、アゲハマも多い終局図になりやすくなります。\n" +
-            "終局図は KataGo の Human SL ネットワーク（人の対局から打ち方を学習したもの）の自動対局で作ります。初回はネットワーク（約 29 MB）を読み込みます。1 局の生成に、9 路で 1 分前後、19 路で数分かかります（端末の性能によります）。",
-          "katago-only",
-        ),
+        ...(HUMAN_SL_ENABLED ? [difficultySetting(settings)] : []),
         setting(
           "SGF ファイル",
           [
@@ -267,6 +256,9 @@ function showSettings(root: HTMLElement, settings: Settings): void {
     ]),
   );
   const selected = (name: string) => root.querySelector<HTMLInputElement>(`input[name="${name}"]:checked`)!.value;
+  // 盤面の難しさを出していないとき（Human SL を使わないとき）は従来のネットワーク
+  const formDifficulty = (): BoardDifficulty =>
+    HUMAN_SL_ENABLED ? (selected("difficulty") as BoardDifficulty) : "classic";
   root.querySelector("#scoreboard-button")!.addEventListener("click", () => {
     window.clearTimeout(seedTimer);
     showScoreboard(root, Number(selected("size")), selected("mode") === "cpu" ? "cpu" : "solo");
@@ -323,7 +315,7 @@ function showSettings(root: HTMLElement, settings: Settings): void {
         seedNumber(seedInput.value),
         true,
         shapeRules(),
-        BOARD_DIFFICULTIES[selected("difficulty") as BoardDifficulty].rank,
+        BOARD_DIFFICULTIES[formDifficulty()].rank,
       );
     }
   }
@@ -355,7 +347,7 @@ function showSettings(root: HTMLElement, settings: Settings): void {
     handLimits: { [BLACK]: readHandLimit(root, "hand-limit-black"), [WHITE]: readHandLimit(root, "hand-limit-white") },
     shapeRules: shapeRules(),
     replay: selected("start") === "replay",
-    difficulty: selected("difficulty") as BoardDifficulty,
+    difficulty: formDifficulty(),
     seed: seedInput.value.trim() || randomSeed(),
   });
   // 設定を変えたらすぐブラウザーに保存する（シードは保存しない）。次に開いたときも同じ設定にする
@@ -1407,6 +1399,29 @@ function settingGroup(title: string, rows: HTMLElement[]): HTMLElement {
 }
 
 /** 設定の 1 項目（名前と選択肢）。help があれば名前の横に「?」を出す。 */
+/** 盤面の難しさの設定（Human SL を使うときだけ出す）。 */
+function difficultySetting(settings: Settings): HTMLElement {
+  return setting(
+    "盤面の難しさ",
+    radios(
+      "difficulty",
+      (Object.keys(BOARD_DIFFICULTIES) as BoardDifficulty[])
+        .filter((key) => !BOARD_DIFFICULTIES[key].hidden)
+        .map((key) => ({
+          value: key,
+          label: BOARD_DIFFICULTIES[key].label,
+          // 隠している選択肢（以前の記録の再プレイ）のときは既定を選んでおく
+          checked: BOARD_DIFFICULTIES[settings.difficulty].hidden
+            ? key === defaultSettings().difficulty
+            : settings.difficulty === key,
+        })),
+    ),
+    "むずかしいほど、地が細かく分かれ、アゲハマも多い終局図になりやすくなります。\n" +
+      "終局図は KataGo の Human SL ネットワーク（人の対局から打ち方を学習したもの）の自動対局で作ります。1 局の生成に、9 路で 1 分前後、19 路で数分かかります（端末の性能によります）。",
+    "katago-only",
+  );
+}
+
 function setting(label: string, content: (Node | string)[], help?: string, className?: string): HTMLElement {
   return h("div", { class: className ? `setting ${className}` : "setting", role: "group", "aria-label": label }, [
     h("div", { class: "setting-label" }, help ? [label, helpIcon(label, help)] : [label]),
@@ -1549,7 +1564,7 @@ function defaultSettings(): Settings {
     handLimits: { [BLACK]: DEFAULT_HAND_LIMIT, [WHITE]: DEFAULT_HAND_LIMIT },
     shapeRules: DEFAULT_SHAPE_RULES,
     replay: false,
-    difficulty: "normal",
+    difficulty: HUMAN_SL_ENABLED ? "normal" : "classic",
     seed: randomSeed(),
   };
 }
