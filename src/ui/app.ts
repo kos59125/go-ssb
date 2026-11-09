@@ -1,5 +1,6 @@
 import { GameGenerator } from "../ai/client";
 import { UnfilledDameError } from "../ai/protocol";
+import { DIFFICULTIES, DIFFICULTY_LABELS, Difficulty, isDifficulty } from "../ai/complexity";
 import { GeneratedGame } from "../ai/generate";
 import { GoGame } from "../ai/go";
 import { GameRecord, parseSgf } from "../ai/sgf";
@@ -38,6 +39,8 @@ interface Settings {
   handLimits: Record<Color, number>;
   /** 整地ルール（1 列の区間、5 × 奇数）。 */
   shapeRules: ShapeRules;
+  /** 自動で作る終局図の難しさ。 */
+  difficulty: Difficulty;
   /** 開始時に初手から棋譜を並べるか（仕様書 §5.1）。 */
   replay: boolean;
   /** 終局図を作るシード。保存せず、画面を開くたびにランダムに決める。 */
@@ -144,6 +147,16 @@ function showSettings(root: HTMLElement, settings: Settings): void {
             { value: "9", label: "9 路", checked: settings.size === 9 },
           ]),
           undefined,
+          "katago-only",
+        ),
+        setting(
+          "局面の難しさ",
+          radios(
+            "difficulty",
+            DIFFICULTIES.map((d) => ({ value: d, label: DIFFICULTY_LABELS[d], checked: settings.difficulty === d })),
+          ),
+          "自動で作る終局図の複雑さです（目安: かんたん＝10 級、ふつう＝初段、むずかしい＝6 段くらいの局面）。\n" +
+            "地の分かれ方（区間の数）、境界線の長さ、石のまとまりの数、死に石とアゲハマの数から複雑さを測り、選んだ難しさに合う局面を使います。",
           "katago-only",
         ),
         setting(
@@ -276,13 +289,13 @@ function showSettings(root: HTMLElement, settings: Settings): void {
   });
   function prefetch() {
     if (!dummySeed() && seedInput.value.trim()) {
-      generator.prefetch(Number(selected("size")), seedNumber(seedInput.value), true, shapeRules());
+      generator.prefetch(Number(selected("size")), seedNumber(seedInput.value), true, shapeRules(), selected("difficulty") as Difficulty);
     }
   }
   updateMode();
   prefetch();
   // 整地ルールが変わると、CPU が整地できる局面も変わる
-  for (const input of root.querySelectorAll<HTMLInputElement>('input[name="size"], input[name="one-line"], input[name="five-by-odd"]')) {
+  for (const input of root.querySelectorAll<HTMLInputElement>('input[name="size"], input[name="difficulty"], input[name="one-line"], input[name="five-by-odd"]')) {
     input.addEventListener("change", prefetch);
   }
   let seedTimer = 0;
@@ -306,6 +319,7 @@ function showSettings(root: HTMLElement, settings: Settings): void {
     handLimit: readHandLimit(root, "hand-limit"),
     handLimits: { [BLACK]: readHandLimit(root, "hand-limit-black"), [WHITE]: readHandLimit(root, "hand-limit-white") },
     shapeRules: shapeRules(),
+    difficulty: selected("difficulty") as Difficulty,
     replay: selected("start") === "replay",
     seed: seedInput.value.trim() || randomSeed(),
   });
@@ -351,7 +365,7 @@ async function prepareGame(root: HTMLElement, settings: Settings): Promise<void>
   try {
     game = settings.record
       ? await generator.fromRecord(settings.record, forCpu, settings.shapeRules, settings.fillDame ?? false)
-      : await generator.take(settings.size, seed, forCpu, settings.shapeRules, (move) => (status.textContent = `自動対局中… ${move} 手目`));
+      : await generator.take(settings.size, seed, forCpu, settings.shapeRules, settings.difficulty, (move) => (status.textContent = `自動対局中… ${move} 手目`));
   } catch (err) {
     if (cancelled) return;
     if (settings.record) {
@@ -391,7 +405,7 @@ async function prepareGame(root: HTMLElement, settings: Settings): Promise<void>
     status.textContent = "この棋譜は、CPU が整地できる形が見つかりませんでした。ひとりでモードで遊んでください。";
     return;
   }
-  if (!settings.record) generator.prefetch(settings.size, seedNumber(nextSeed), forCpu, settings.shapeRules);
+  if (!settings.record) generator.prefetch(settings.size, seedNumber(nextSeed), forCpu, settings.shapeRules, settings.difficulty);
   if (settings.replay) await replayGame(root, game);
   showGame(root, settings, game.position, nextSeed, game.layouts);
 }
@@ -1415,6 +1429,7 @@ function defaultSettings(): Settings {
     handLimit: DEFAULT_HAND_LIMIT,
     handLimits: { [BLACK]: DEFAULT_HAND_LIMIT, [WHITE]: DEFAULT_HAND_LIMIT },
     shapeRules: DEFAULT_SHAPE_RULES,
+    difficulty: "normal",
     replay: false,
     seed: randomSeed(),
   };
@@ -1440,6 +1455,7 @@ function normalizeSettings(saved: Partial<Settings>): Settings {
       [WHITE]: toCpuLevel(saved.watchLevels?.[WHITE]) ?? fallback.watchLevels[WHITE],
     };
     if (!["solo", "cpu", "watch"].includes(settings.mode)) settings.mode = fallback.mode;
+    if (!isDifficulty(settings.difficulty)) settings.difficulty = fallback.difficulty;
     settings.handLimit = clampHandLimit(settings.handLimit);
     const rules: Partial<ShapeRules> = saved.shapeRules ?? {};
     settings.shapeRules = {
@@ -1489,7 +1505,9 @@ function showScoreboard(root: HTMLElement, size: number, tab: "solo" | "cpu"): v
     return button;
   };
   const source = (r: { settings: Settings }) =>
-    r.settings.record ? `棋譜: ${recordLabel(r.settings.record)}` : `シード ${r.settings.seed}`;
+    r.settings.record
+      ? `棋譜: ${recordLabel(r.settings.record)}`
+      : `シード ${r.settings.seed}・${DIFFICULTY_LABELS[isDifficulty(r.settings.difficulty) ? r.settings.difficulty : "normal"]}`;
   const rulesLabel = (r: { settings: Settings }) => {
     const rules = normalizeSettings(r.settings).shapeRules;
     const parts: string[] = [];
@@ -1575,7 +1593,9 @@ function showScoreboard(root: HTMLElement, size: number, tab: "solo" | "cpu"): v
 
 /** シードの一言（同じ局面で遊べるように添える）。棋譜で遊んだときは付けない。 */
 function seedText(settings: Settings): string {
-  return settings.record ? "" : `（シード ${settings.seed}）`;
+  if (settings.record) return "";
+  const difficulty = DIFFICULTY_LABELS[isDifficulty(settings.difficulty) ? settings.difficulty : "normal"];
+  return `（シード ${settings.seed}・${difficulty}）`;
 }
 
 /** ひとりでモードの記録のシェア文。 */

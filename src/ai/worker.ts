@@ -47,7 +47,7 @@ async function handleRecord({ id, record, forCpu, rules, fillDame, modelUrl }: E
   }
 }
 
-async function handle({ id, size, seed, forCpu, rules, modelUrl }: Extract<WorkerRequest, { type: "generate" }>): Promise<void> {
+async function handle({ id, size, seed, forCpu, rules, difficulty, modelUrl }: Extract<WorkerRequest, { type: "generate" }>): Promise<void> {
   const post = (msg: WorkerResponse) => self.postMessage(msg);
   try {
     const evaluate = await getEvaluator(modelUrl);
@@ -56,6 +56,7 @@ async function handle({ id, size, seed, forCpu, rules, modelUrl }: Extract<Worke
       random: mulberry32(seed),
       forCpu,
       rules,
+      difficulty,
       onMove: (move) => post({ type: "progress", id, move }),
       shouldStop: () => cancelled.has(id),
     });

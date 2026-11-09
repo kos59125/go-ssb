@@ -50,14 +50,19 @@ export interface CpuProfile {
    * その長さの分だけアゲハマをまとめて持ち、なぞって一気に置く。
    */
   swipe?: boolean;
+  /**
+   * 整地の形を、動かす石がいちばん少なくなるように選ぶ（埋めるより石を動かした方が早い所は動かす、
+   * 今ある石をそのまま区切りに使う）。
+   */
+  optimize?: boolean;
 }
 
 /** CPU の強さ。仕様書 §3.1.1 */
 export const CPU_LEVELS = {
   beginner: { label: "入門", interval: 3000, mistake: 0.1, waste: 0.25, batch: 1, efficient: false },
   novice: { label: "初級", interval: 1800, mistake: 0.03, waste: 0.1, batch: 2, efficient: true },
-  dan: { label: "有段", interval: 600, mistake: 0, waste: 0, batch: 6, efficient: true },
-  pro: { label: "プロ", interval: 450, mistake: 0, waste: 0, batch: 10, efficient: true, swipe: true },
+  dan: { label: "有段", interval: 600, mistake: 0, waste: 0, batch: 6, efficient: true, optimize: true },
+  pro: { label: "プロ", interval: 450, mistake: 0, waste: 0, batch: 10, efficient: true, swipe: true, optimize: true },
 } as const satisfies Record<string, CpuProfile>;
 export type CpuLevel = keyof typeof CPU_LEVELS;
 
@@ -116,7 +121,8 @@ export class Cpu {
       : { label: "", interval: 0, mistake: 0, waste: 0, batch: 1, efficient: false };
     this.random = options.random ?? Math.random;
     for (const color of player.assigned) {
-      const layout = layouts[color];
+      // 動かす石の少ない形を自分で探す強さでは、渡された形（最初に見つかった形）は使わない
+      const layout = this.profile.optimize ? null : layouts[color];
       this.layouts.set(color, layout ? { area: new Set(layout.area), empties: new Set(layout.empties) } : null);
     }
   }
@@ -422,8 +428,9 @@ export class Cpu {
       board,
       color,
       this.player.position.trays[opponent(color)] + held,
-      20_000,
+      this.profile.optimize ? 60_000 : 20_000,
       this.player.match.shapeRules,
+      this.profile.optimize,
     );
     this.layouts.set(color, layout);
     return layout;

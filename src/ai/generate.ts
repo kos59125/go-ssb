@@ -5,6 +5,7 @@ import { GoGame, Move, PASS } from "./go";
 import type { GameRecord } from "./sgf";
 import { SerializedLayout, planLayouts } from "../game/layout";
 import { UnfilledDameError } from "./protocol";
+import { Difficulty, complexityScore, difficultyMiss } from "./complexity";
 import { DEFAULT_SHAPE_RULES, ShapeRules } from "../core/shapes";
 
 export const KOMI = 6.5;
@@ -42,6 +43,8 @@ export interface GenerateOptions {
   forCpu?: boolean;
   /** 整地の形の追加ルール（forCpu で形を探すときに使う）。 */
   rules?: ShapeRules;
+  /** 局面の難しさ。指定すると、複雑さの点数がその範囲に入る局面を作る。 */
+  difficulty?: Difficulty;
 }
 
 export class GenerationCancelled extends Error {
@@ -79,18 +82,36 @@ export async function finishRecord(
  * 条件を満たさない対局は作り直す。
  */
 export async function generateGame(evaluate: Evaluator, options: GenerateOptions): Promise<GeneratedGame> {
+  // 難しさが合わない局面は作り直す。合うものが続けて出なければ、いちばん近いものを使う
+  let closest: { game: GeneratedGame; miss: number } | null = null;
+  let misses = 0;
   for (let attempt = 0; attempt < 20; attempt++) {
     const game = await selfPlay(evaluate, options);
     if (!game) continue;
     const finished = await finish(evaluate, game, { random: options.random ?? Math.random, reject: options.onReject });
     if (!finished) continue;
-    if (!options.forCpu) return finished;
-    const layouts = planLayouts(finished.position, options.rules);
-    if (layouts[BLACK] && layouts[WHITE]) return { ...finished, layouts };
-    options.onReject?.("layout");
+    let result: GeneratedGame = finished;
+    if (options.forCpu) {
+      const layouts = planLayouts(finished.position, options.rules);
+      if (!layouts[BLACK] || !layouts[WHITE]) {
+        options.onReject?.("layout");
+        continue;
+      }
+      result = { ...finished, layouts };
+    }
+    if (!options.difficulty) return result;
+    const miss = difficultyMiss(complexityScore(result.position), options.difficulty);
+    if (miss === 0) return result;
+    options.onReject?.("difficulty");
+    if (!closest || miss < closest.miss) closest = { game: result, miss };
+    if (++misses >= DIFFICULTY_TRIES) return closest.game;
   }
+  if (closest) return closest.game;
   throw new Error("終局図を生成できませんでした");
 }
+
+/** 難しさが合わない局面を、続けて何回まで作り直すか。 */
+const DIFFICULTY_TRIES = 8;
 
 async function selfPlay(evaluate: Evaluator, options: GenerateOptions): Promise<GoGame | null> {
   const { size } = options;

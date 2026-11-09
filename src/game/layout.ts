@@ -64,6 +64,11 @@ export function planLayout(
   prisoners: number,
   maxNodes = 200_000,
   rules: ShapeRules = DEFAULT_SHAPE_RULES,
+  /**
+   * 動かす石（今は石がある点を空点にする数）がいちばん少ない形を探す（強い CPU 用）。
+   * アゲハマの数は決まっているので、動かす石が少ないほど操作が少ない。
+   */
+  optimize = false,
 ): Layout | null {
   const { regions } = analyze(board);
   const area = new Set<number>();
@@ -89,7 +94,7 @@ export function planLayout(
   const allowed = rules.oneLineFrom ?? Infinity;
   const passes = allowed > PREFERRED_ONE_LINE_FROM ? [PREFERRED_ONE_LINE_FROM, allowed] : [allowed];
   for (const oneLineFrom of passes) {
-    const empties = new Solver(board, area, target, maxNodes, oneLineFrom, rules.allowFiveByOdd).solve();
+    const empties = new Solver(board, area, target, maxNodes, oneLineFrom, rules.allowFiveByOdd, optimize).solve();
     if (empties) return { area, empties };
   }
   return null;
@@ -121,6 +126,8 @@ class Solver {
     private readonly maxNodes: number,
     oneLineFrom: number,
     private readonly fiveByOdd: boolean,
+    /** 最初に見つけた形で終わらず、動かす石がいちばん少ない形を探す。 */
+    private readonly optimize = false,
   ) {
     this.n = board.size;
     this.cells = [...area].sort((a, b) => a - b);
@@ -155,8 +162,20 @@ class Solver {
     }
   }
 
+  /** これまでに見つけた、動かす石がいちばん少ない形（optimize のとき）。 */
+  private best: Set<number> | null = null;
+  private bestCost = Infinity;
+  /** 今の途中の形で、石のある点を空点にする数（＝動かす石の数）。 */
+  private cost = 0;
+
   solve(): Set<number> | null {
-    return this.dfs(0, 0, false) ? new Set(this.cells.filter((i) => this.state[i] === 2)) : null;
+    const found = this.dfs(0, 0, false);
+    if (this.optimize) return this.best;
+    return found ? this.snapshot() : null;
+  }
+
+  private snapshot(): Set<number> {
+    return new Set(this.cells.filter((i) => this.state[i] === 2));
   }
 
   /**
@@ -165,8 +184,17 @@ class Solver {
    * @param remainderUsed 余りの区間を置いたか（余りの区間は全体で 1 つまで）
    */
   private dfs(k: number, filled: number, remainderUsed: boolean): boolean {
-    if (filled === this.target) return true;
-    if (++this.nodes > this.maxNodes) return false;
+    if (filled === this.target) {
+      if (!this.optimize) return true;
+      // いちばん少ない形を覚えて探し続ける（石を 1 個も動かさない形なら、それ以上はない）
+      if (this.cost < this.bestCost) {
+        this.bestCost = this.cost;
+        this.best = this.snapshot();
+      }
+      return this.bestCost === 0;
+    }
+    // 探索の上限: optimize なら、それまでの最良の形で打ち切る
+    if (++this.nodes > this.maxNodes) return this.optimize;
     while (k < this.cells.length && this.state[this.cells[k]] !== 0) k++;
     if (k >= this.cells.length) return false;
     // 残りの未定の点をすべて使っても足りなければ打ち切る
@@ -180,7 +208,13 @@ class Solver {
     for (const { shape, remainder } of this.shapes(need, remainderUsed)) {
       const placed = this.place(p, shape);
       if (!placed) continue;
+      if (this.optimize && this.cost + placed.cost >= this.bestCost) {
+        this.unplace(placed);
+        continue;
+      }
+      this.cost += placed.cost;
       if (this.dfs(k + 1, filled + shape.cells.length, remainderUsed || remainder)) return true;
+      this.cost -= placed.cost;
       this.unplace(placed);
     }
     // この点は石にする
@@ -209,7 +243,7 @@ class Solver {
   }
 
   /** p を原点に shape を置く。置けたら変更した点を返す。 */
-  private place(p: number, shape: Shape): { cells: number[]; walls: number[] } | null {
+  private place(p: number, shape: Shape): { cells: number[]; walls: number[]; cost: number } | null {
     const px = p % this.n;
     const py = Math.floor(p / this.n);
     const at = ([dx, dy]: [number, number]): number | null => {
@@ -240,8 +274,10 @@ class Solver {
       }
     }
     for (const i of cells) this.state[i] = 2;
+    // 今は石がある点を空点にする数（その石は別の点へ動かす）
+    const cost = cells.filter((i) => this.board.cells[i] !== EMPTY).length;
     for (const j of walls) this.state[j] = 1;
-    return { cells, walls };
+    return { cells, walls, cost };
   }
 
   private unplace({ cells, walls }: { cells: number[]; walls: number[] }): void {
