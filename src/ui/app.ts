@@ -17,6 +17,8 @@ import { TRAY_SLOTS } from "./trayView";
 import { formatTime, h, makeCursor, trayElement } from "./dom";
 import { CpuCursorDriver } from "./cpuDriver";
 import { showWatch } from "./watch";
+import { GameRecorder, RecordedCursor } from "./recorder";
+import { videoButton } from "./videoDialog";
 import { CpuRecord, CpuResult, SoloRecord, addCpuRecord, addSoloRecord, loadScores, soloRanking } from "./scores";
 import { shareOnX } from "./share";
 
@@ -509,6 +511,10 @@ function showGame(
   const cpuPlayer = cpu?.player ?? null;
   // 自分が白なら盤を 180° 回して表示する（仕様書 §4）
   const view = new BoardView(settings.size, cpuMode && myColor === WHITE);
+  // 対局のようすを記録して、終わったら動画にできるようにする（盤の向きは黒番から見たものにそろえる）
+  const recorder = new GameRecorder(settings.size, cpuMode && myColor === WHITE);
+  /** 記録する CPU（とおまかせ）のカーソル。CPU の準備ができたら差し替える。 */
+  let recordedCursors: () => RecordedCursor[] = () => [];
   const colorName = (c: Color) => (c === BLACK ? "黒" : "白");
 
   const phaseLabel = h("div", { class: "phase" }, []);
@@ -621,6 +627,15 @@ function showGame(
 
   const render = () => {
     view.render(session.board, session.marks, session.hand?.origins ?? [], errorMarks);
+    recorder.capture({
+      started: session.started,
+      cells: session.board.cells,
+      trays: session.position.trays,
+      marks: session.marks,
+      cursors: recordedCursors(),
+      clock: session.elapsed(),
+      running: session.phase !== "finished" && gaveUpAt === null && !decided,
+    });
     if (session.phase !== "finished" && gaveUpAt === null) {
       const removal = cpuMode
         ? `① 死に石取り：自分の地（${colorName(myColor)}地）の中の死に石をアゲハマへ（残り ${countDeadStones(session)} 個）`
@@ -962,6 +977,10 @@ function showGame(
     const auto = new Cpu(session, layouts ?? {});
     autoCursor.hidden = false;
     const autoDriver = new CpuCursorDriver(autoCursor, auto, locate, () => render());
+    recordedCursors = () => [
+      ...(cpuDriver ? [{ label: "CPU", color: "#2f5d8a", point: cpuDriver.point }] : []),
+      { label: "おまかせ", color: "#b5452b", point: autoDriver.point },
+    ];
     cleanups.push(() => autoDriver.dispose());
     autoDriver.moveTo(null);
     let idle = 0;
@@ -1163,14 +1182,17 @@ function showGame(
     }
     const share = h("button", { type: "button", class: "share-x" }, ["X でシェア"]);
     share.addEventListener("click", () => shareOnX(shareText));
+    // 動画の最後に重ねる結果（勝敗や「整地完了！」と、タイム）
+    const videoResult = [phaseLabel.textContent ?? "", ...lines.map((n) => n.textContent ?? "")].filter(Boolean).slice(0, 3);
+    const makeVideoButton = () => videoButton(root, recorder, () => videoResult, () => shareText);
     resultBox.replaceChildren(
       h("p", {}, [`黒 ${session.initialScores[BLACK]} 目・白 ${session.initialScores[WHITE]} 目`]),
       ...lines,
-      h("div", { class: "buttons" }, [again, back, scoreboardButton(), share]),
+      h("div", { class: "buttons" }, [again, back, scoreboardButton(), share, makeVideoButton()]),
     );
     resultBox.hidden = false;
-    // 完了したら結果のダイアログを出し、X でシェアできるようにする
-    openResultDialog(root, phaseLabel.textContent ?? "", [...lines].map((n) => n.textContent ?? ""), shareText);
+    // 完了したら結果のダイアログを出し、X でシェアしたり動画を保存したりできるようにする
+    openResultDialog(root, phaseLabel.textContent ?? "", [...lines].map((n) => n.textContent ?? ""), shareText, makeVideoButton());
   };
 
   // --- CPU ---
@@ -1194,6 +1216,7 @@ function showGame(
     return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
   };
   const cpuDriver = cpu ? new CpuCursorDriver(cpuCursor, cpu, locate, () => render()) : null;
+  if (cpuDriver) recordedCursors = () => [{ label: "CPU", color: "#2f5d8a", point: cpuDriver.point }];
   cleanups.push(() => cpuDriver?.dispose());
   const moveCpuCursor = (action: CpuAction | null) => cpuDriver?.moveTo(action);
 
@@ -1597,7 +1620,7 @@ function cpuShareText(r: CpuRecord<Settings>): string {
 }
 
 /** 完了したときの結果ダイアログ。X でシェアできる。 */
-function openResultDialog(root: HTMLElement, title: string, lines: string[], shareText: string): void {
+function openResultDialog(root: HTMLElement, title: string, lines: string[], shareText: string, extra?: HTMLElement): void {
   const dialog = h("dialog", { class: "result-dialog" }, []);
   const share = h("button", { type: "button", class: "share-x primary" }, ["X でシェア"]);
   const close = h("button", { type: "button" }, ["閉じる"]);
@@ -1612,7 +1635,7 @@ function openResultDialog(root: HTMLElement, title: string, lines: string[], sha
     h("h2", {}, [title]),
     ...lines.filter(Boolean).map((line) => h("p", {}, [line])),
     h("p", { class: "share-preview" }, [shareText]),
-    h("div", { class: "buttons" }, [share, close]),
+    h("div", { class: "buttons" }, [share, ...(extra ? [extra] : []), close]),
   );
   root.append(dialog);
   dialog.showModal();

@@ -12,6 +12,8 @@ const SWIPE_STEP_MS = 90;
  */
 export class CpuCursorDriver {
   private readonly timers = new Set<number>();
+  /** カーソルのいる盤の点（動画の記録用）。トレイなど盤の外なら null。 */
+  point: number | null = null;
 
   /**
    * @param locate 操作の場所の画面座標（盤の点やトレイ）。null なら動かさない
@@ -26,6 +28,10 @@ export class CpuCursorDriver {
 
   /** カーソルを action の場所へ動かす（null なら、まだ置いていなければ盤の中央）。 */
   moveTo(action: CpuAction | null): void {
+    if (action) {
+      this.point =
+        action.kind === "swipe" || action.kind === "sequence" ? action.points[0] : "point" in action ? action.point : null;
+    }
     // action が null のときは、まだどこにも置いていなければ盤の中央など（locate が決める）
     const target = action || !this.cursor.style.transform ? this.locate(action) : null;
     if (target) this.cursor.style.transform = `translate(${target.x}px, ${target.y}px)`;

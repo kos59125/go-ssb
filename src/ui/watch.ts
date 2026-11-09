@@ -8,6 +8,8 @@ import { Match, Player } from "../game/match";
 import { BoardView } from "./boardView";
 import { CpuCursorDriver } from "./cpuDriver";
 import { formatTime, h, makeCursor, trayElement } from "./dom";
+import { GameRecorder } from "./recorder";
+import { videoButton } from "./videoDialog";
 
 export interface WatchSettings {
   size: number;
@@ -47,6 +49,8 @@ export function showWatch(
   }
 
   const view = new BoardView(settings.size);
+  // 観戦のようすも記録して、終わったら動画にできるようにする
+  const recorder = new GameRecorder(settings.size);
   const trays = { [BLACK]: trayElement(BLACK, `${colorName(BLACK)} CPU`), [WHITE]: trayElement(WHITE, `${colorName(WHITE)} CPU`) };
   for (const c of sides) trays[c].root.classList.add("readonly");
   const cursors = { [BLACK]: makeCursor(`${colorName(BLACK)} CPU`), [WHITE]: makeCursor(`${colorName(WHITE)} CPU`) };
@@ -105,6 +109,19 @@ export function showWatch(
   };
   const render = () => {
     view.render(match.board, match.marks, [], new Set());
+    recorder.capture({
+      started: match.started,
+      cells: match.board.cells,
+      trays: match.position.trays,
+      marks: match.marks,
+      cursors: drivers.map((d, k) => ({
+        label: `${colorName(sides[k])} CPU`,
+        color: sides[k] === BLACK ? "#2b2620" : "#2f5d8a",
+        point: d.point,
+      })),
+      clock: clock(),
+      running: match.started && !bothFinished(),
+    });
     for (const c of sides) {
       trays[c].view.render(match.position.trays[c]);
       statusLines[c].textContent = stateText(c);
@@ -162,7 +179,16 @@ export function showWatch(
       h("p", {}, [`黒 ${match.initialScores[BLACK]} 目・白 ${match.initialScores[WHITE]} 目`]),
       resultLines[BLACK],
       resultLines[WHITE],
-      h("div", { class: "buttons" }, [again, back]),
+      h("div", { class: "buttons" }, [
+        again,
+        back,
+        videoButton(
+          root,
+          recorder,
+          () => [phaseLabel.textContent ?? "", ...sides.map((c) => stateText(c))],
+          () => `観戦: ${label(BLACK)} vs ${label(WHITE)} — ${phaseLabel.textContent ?? ""}`,
+        ),
+      ]),
     );
     resultBox.hidden = false;
     quit.hidden = true;
