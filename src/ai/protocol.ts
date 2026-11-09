@@ -34,8 +34,8 @@ export type WorkerRequest =
 
 export type WorkerResponse =
   | { type: "progress"; id: number; move: number }
-  /** Human SL ネットワークを読み込み中（初回のみ）。 */
-  | { type: "loading"; id: number }
+  /** Human SL ネットワークを読み込み中（初回のみ）。download: 受け取り中、prepare: 推論の準備中。loaded はバイト数。 */
+  | { type: "loading"; id: number; stage: "download" | "prepare"; loaded: number }
   | { type: "done"; id: number; game: SerializedGame }
   | { type: "error"; id: number; message: string; dame?: DameInfo };
 

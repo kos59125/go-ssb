@@ -2,7 +2,22 @@ import { Board } from "../core/board";
 import { DEFAULT_SHAPE_RULES, type ShapeRules } from "../core/shapes";
 import type { GeneratedGame } from "./generate";
 import type { GameRecord } from "./sgf";
-import { HUMAN_MODEL_PATH, MODEL_PATH, UnfilledDameError, type SerializedGame, type WorkerRequest, type WorkerResponse } from "./protocol";
+import {
+  HUMAN_MODEL_PATH,
+  MODEL_PATH,
+  UnfilledDameError,
+  type SerializedGame,
+  type WorkerRequest,
+  type WorkerResponse,
+} from "./protocol";
+
+/** Human SL ネットワークの読み込みの進み具合。 */
+export interface LoadingInfo {
+  /** download: 受け取り中、prepare: 推論の準備中。 */
+  stage: "download" | "prepare";
+  /** 受け取ったバイト数。 */
+  loaded: number;
+}
 
 /**
  * 終局図の生成を Web Worker で行う。盤サイズとシードの組ごとに先読みしておける。
@@ -17,9 +32,9 @@ export class GameGenerator {
       resolve: (g: GeneratedGame) => void;
       reject: (e: Error) => void;
       onProgress?: (move: number) => void;
-      /** Human SL ネットワークの読み込みを始めた。 */
-      onLoading?: () => void;
-      loading?: boolean;
+      /** Human SL ネットワークの読み込みの進み具合。 */
+      onLoading?: (info: LoadingInfo) => void;
+      loading?: LoadingInfo;
     }
   >();
   private readonly prefetched = new Map<string, { id: number; promise: Promise<GeneratedGame> }>();
@@ -40,7 +55,10 @@ export class GameGenerator {
     const key = cacheKey(size, seed, forCpu, rules, humanRank);
     for (const [other, entry] of this.prefetched) {
       if (other === key || this.taking.has(entry.id)) continue;
-      this.worker?.postMessage({ type: "cancel", id: entry.id } satisfies WorkerRequest);
+      this.worker?.postMessage({
+        type: "cancel",
+        id: entry.id,
+      } satisfies WorkerRequest);
       this.prefetched.delete(other);
     }
     if (this.prefetched.has(key)) return;
@@ -60,7 +78,7 @@ export class GameGenerator {
     rules: ShapeRules,
     humanRank: string | null,
     onProgress?: (move: number) => void,
-    onLoading?: () => void,
+    onLoading?: (info: LoadingInfo) => void,
   ): Promise<GeneratedGame> {
     const key = cacheKey(size, seed, forCpu, rules, humanRank);
     this.prefetch(size, seed, forCpu, rules, humanRank);
@@ -69,7 +87,7 @@ export class GameGenerator {
     if (listener) {
       listener.onProgress = onProgress;
       listener.onLoading = onLoading;
-      if (listener.loading) onLoading?.();
+      if (listener.loading) onLoading?.(listener.loading);
     }
     this.taking.add(entry.id);
     try {
@@ -78,6 +96,16 @@ export class GameGenerator {
       this.taking.delete(entry.id);
       this.prefetched.delete(key);
     }
+  }
+
+  /** Worker を止めて作り直す（応答がなくなったとき）。待っている依頼はすべて失敗にする。 */
+  reset(): void {
+    this.worker?.terminate();
+    this.worker = null;
+    for (const entry of this.pending.values()) entry.reject(new Error("生成を中断しました"));
+    this.pending.clear();
+    this.prefetched.clear();
+    this.taking.clear();
   }
 
   /** 実戦の棋譜（SGF）から整地用の局面を作る。 */
@@ -91,7 +119,15 @@ export class GameGenerator {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      worker.postMessage({ type: "record", id, record, forCpu, rules, fillDame, modelUrl: modelUrl() } satisfies WorkerRequest);
+      worker.postMessage({
+        type: "record",
+        id,
+        record,
+        forCpu,
+        rules,
+        fillDame,
+        modelUrl: modelUrl(),
+      } satisfies WorkerRequest);
     });
   }
 
@@ -122,19 +158,21 @@ export class GameGenerator {
 
   private ensureWorker(): Worker {
     if (this.worker) return this.worker;
-    const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
+    const worker = new Worker(new URL("./worker.ts", import.meta.url), {
+      type: "module",
+    });
     worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
       const msg = e.data;
       const entry = this.pending.get(msg.id);
       if (!entry) return;
       if (msg.type === "progress") {
-        entry.loading = false;
+        entry.loading = undefined;
         entry.onProgress?.(msg.move);
         return;
       }
       if (msg.type === "loading") {
-        entry.loading = true;
-        entry.onLoading?.();
+        entry.loading = { stage: msg.stage, loaded: msg.loaded };
+        entry.onLoading?.(entry.loading);
         return;
       }
       this.pending.delete(msg.id);
@@ -154,7 +192,10 @@ export class GameGenerator {
 
 function deserialize(game: SerializedGame): GeneratedGame {
   const { cells, dead, trays, ...rest } = game;
-  return { ...rest, position: { board: new Board(game.size, cells, dead), trays } };
+  return {
+    ...rest,
+    position: { board: new Board(game.size, cells, dead), trays },
+  };
 }
 
 /** ネットワークの絶対 URL。Worker からは相対パスが解決できないので、ページ側で作る。 */

@@ -69,6 +69,9 @@ const BOARD_DIFFICULTIES: Record<BoardDifficulty, { label: string; rank: string 
 
 const humanRank = (settings: Settings) => BOARD_DIFFICULTIES[settings.difficulty].rank;
 
+/** 終局図の生成で、Worker から何も届かないまま止まったとみなすまでの時間。 */
+const STALL_MS = 120_000;
+
 /** 棋譜の再生にかける時間。 */
 const REPLAY_MS = 10_000;
 
@@ -385,8 +388,34 @@ async function prepareGame(root: HTMLElement, settings: Settings): Promise<void>
   ]);
   const back = h("button", {}, ["やめる"]);
   let cancelled = false;
+  // 何をしているかと経過秒数を出す（Human SL の読み込みや生成は時間がかかるので、止まって見えないように）
+  const startedAt = Date.now();
+  let stage = status.textContent ?? "";
+  const showStage = () => {
+    const seconds = Math.floor((Date.now() - startedAt) / 1000);
+    status.textContent = seconds > 0 ? `${stage}（${seconds} 秒）` : stage;
+  };
+  // 生成中に Worker から何も届かないまま STALL_MS が過ぎたら、止まったとみなす
+  // （メモリ不足でブラウザーが Worker を止めた場合など。エラーも届かないことがある）
+  let lastActivity = Date.now();
+  let stalled: (err: Error) => void = () => {};
+  const stall = new Promise<never>((_, reject) => (stalled = reject));
+  stall.catch(() => {});
+  const setStage = (text: string) => {
+    stage = text;
+    lastActivity = Date.now();
+    showStage();
+  };
+  const ticker = window.setInterval(() => {
+    showStage();
+    if (!settings.record && Date.now() - lastActivity > STALL_MS) {
+      generator.reset();
+      stalled(new Error("応答がなくなりました。端末のメモリが足りない可能性があります"));
+    }
+  }, 1000);
   back.addEventListener("click", () => {
     cancelled = true;
+    window.clearInterval(ticker);
     showSettings(root, { ...settings, seed: randomSeed() });
   });
   root.replaceChildren(
@@ -397,16 +426,25 @@ async function prepareGame(root: HTMLElement, settings: Settings): Promise<void>
   try {
     game = settings.record
       ? await generator.fromRecord(settings.record, forCpu, settings.shapeRules, settings.fillDame ?? false)
-      : await generator.take(
-          settings.size,
-          seed,
-          forCpu,
-          settings.shapeRules,
-          humanRank(settings),
-          (move) => (status.textContent = `自動対局中… ${move} 手目`),
-          () => (status.textContent = "Human SL ネットワーク（約 29 MB）を読み込んでいます…"),
-        );
+      : await Promise.race([
+          stall,
+          generator.take(
+            settings.size,
+            seed,
+            forCpu,
+            settings.shapeRules,
+            humanRank(settings),
+            (move) => setStage(`自動対局中… ${move} 手目`),
+            ({ stage, loaded }) =>
+              setStage(
+                stage === "download"
+                  ? `Human SL ネットワークを読み込んでいます… ${(loaded / 1e6).toFixed(1)} MB / 約 29 MB`
+                  : "Human SL ネットワークを準備しています…",
+              ),
+          ),
+        ]);
   } catch (err) {
+    window.clearInterval(ticker);
     if (cancelled) return;
     if (settings.record) {
       // 棋譜の問題（ダメが詰まっていない等）は、仮の局面では代わりにならないので設定に戻ってもらう
@@ -437,8 +475,15 @@ async function prepareGame(root: HTMLElement, settings: Settings): Promise<void>
       showGame(root, settings, position, nextSeed, planLayouts(position, settings.shapeRules));
     });
     status.after(fallback);
+    // Human SL が使えない端末（メモリ不足など）では、従来の小さなネットワークで作れる
+    if (settings.difficulty !== "classic") {
+      const classic = h("button", {}, ["小さなネットワークで作る"]);
+      classic.addEventListener("click", () => void prepareGame(root, { ...settings, difficulty: "classic" }));
+      fallback.after(classic);
+    }
     return;
   }
+  window.clearInterval(ticker);
   if (cancelled) return;
   // 実戦の棋譜は作り直せないので、CPU が整地できる形が見つからなければ vs CPU では遊べない
   if (settings.mode === "cpu" && !game.layouts?.[settings.myColor]) {
