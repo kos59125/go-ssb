@@ -1192,7 +1192,8 @@ function showGame(
   /** CPU のカーソルを、操作した点（またはトレイ）へ動かす。 */
   /** CPU の操作の場所の画面座標（盤の点、トレイ。場所がなければ盤の中央）。 */
   const locate = (action: CpuAction | null) => {
-    const point = action?.kind === "swipe" ? action.points[0] : action && "point" in action ? action.point : null;
+    const point =
+      action?.kind === "swipe" || action?.kind === "sequence" ? action.points[0] : action && "point" in action ? action.point : null;
     if (point !== null) {
       const box = view.svg.getBoundingClientRect();
       const { x, y } = view.pointBox(point);

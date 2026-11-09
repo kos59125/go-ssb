@@ -50,18 +50,29 @@ export class CpuCursorDriver {
       return;
     }
     if (plan.steps && plan.steps.length > 0) {
-      // なぞって置く: 最初の点に着いたら、1 点ずつカーソルを進めながら置く
+      // 続けて操作する（なぞって置く・続けてクリックする）: 最初の点に着いたらそこで操作し、
+      // 次の点へはその間隔をかけてカーソルを動かし、着いた時点で操作する
       const steps = plan.steps;
       this.later(CURSOR_TRAVEL_MS, () => {
         this.cursor.classList.add("swiping");
+        let at = 0;
         steps.forEach((step, k) => {
-          this.later(k * SWIPE_STEP_MS, () => {
-            this.moveTo({ kind: "place", point: step.point });
+          const gap = k === 0 ? 0 : (step.delay ?? SWIPE_STEP_MS);
+          const start = at;
+          at += gap;
+          if (k > 0) {
+            this.later(start, () => {
+              this.cursor.style.transitionDuration = `${gap}ms`;
+              this.moveTo({ kind: "place", point: step.point });
+            });
+          }
+          this.later(at, () => {
             step.run();
             this.showHeld();
             this.onStep();
             if (k === steps.length - 1) {
               this.cursor.classList.remove("swiping");
+              this.cursor.style.transitionDuration = "";
               after(plan.action);
             }
           });

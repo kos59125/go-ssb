@@ -13,6 +13,8 @@ export type CpuAction =
   | { kind: "place"; point: number }
   /** 持っている石を、直線に並んだ点へなぞって続けて置く（プロ）。 */
   | { kind: "swipe"; points: number[] }
+  /** 離れた点を続けてクリックする（プロ）。石をまとめて持つ、持っている石をばらまく。 */
+  | { kind: "sequence"; points: number[] }
   | { kind: "drop-tray"; owner: Color }
   | { kind: "complete" };
 
@@ -23,8 +25,11 @@ export type CpuAction =
 export interface CpuPlan {
   action: CpuAction;
   run?: () => boolean;
-  /** なぞって置くときの 1 点ずつの操作（画面ではカーソルを動かしながら順に行う）。run はこれをまとめて行う。 */
-  steps?: { point: number; run: () => boolean }[];
+  /**
+   * 続けて行う 1 点ずつの操作（なぞって置く、続けてクリックする）。画面ではカーソルを動かしながら順に行う。
+   * delay はその点へ移るまでの時間（ミリ秒、省略時は画面の決まった間隔）。run はこれをまとめて行う。
+   */
+  steps?: { point: number; run: () => boolean; delay?: number }[];
 }
 
 const IDLE: CpuPlan = { action: { kind: "idle" } };
@@ -50,6 +55,8 @@ export interface CpuProfile {
    * その長さの分だけアゲハマをまとめて持ち、なぞって一気に置く。
    */
   swipe?: boolean;
+  /** 離れた石も続けてクリックして、まとめて持つか（盤上の動かす石。トレイからは batch までまとめて持つ）。 */
+  multiPick?: boolean;
   /**
    * 整地の形を、動かす石がいちばん少なくなるように選ぶ（埋めるより石を動かした方が早い所は動かす、
    * 今ある石をそのまま区切りに使う）。
@@ -61,8 +68,18 @@ export interface CpuProfile {
 export const CPU_LEVELS = {
   beginner: { label: "入門", interval: 3000, mistake: 0.1, waste: 0.25, batch: 1, efficient: false },
   novice: { label: "初級", interval: 1800, mistake: 0.03, waste: 0.1, batch: 2, efficient: true },
-  dan: { label: "有段", interval: 600, mistake: 0, waste: 0, batch: 6, efficient: true, optimize: true },
-  pro: { label: "プロ", interval: 450, mistake: 0, waste: 0, batch: 10, efficient: true, swipe: true, optimize: true },
+  dan: { label: "有段", interval: 600, mistake: 0, waste: 0, batch: 6, efficient: true, multiPick: true, optimize: true },
+  pro: {
+    label: "プロ",
+    interval: 450,
+    mistake: 0,
+    waste: 0,
+    batch: 10,
+    efficient: true,
+    multiPick: true,
+    swipe: true,
+    optimize: true,
+  },
 } as const satisfies Record<string, CpuProfile>;
 export type CpuLevel = keyof typeof CPU_LEVELS;
 
@@ -234,6 +251,11 @@ export class Cpu {
       const size = p.board.size;
       targets.sort((a, b) => distance(a, from, size) - distance(b, from, size));
     }
+    // プロ: 死に石を近い順に続けてクリックして、まとめてトレイへ
+    if (this.profile.swipe) {
+      const tour = this.tour(targets.filter((i) => p.canPick(i)), Infinity);
+      if (tour.length > 1) return this.sequence(tour, (i) => p.capture(i));
+    }
     const point = targets.find((i) => p.canPick(i));
     if (point !== undefined) {
       return {
@@ -268,6 +290,12 @@ export class Cpu {
       }
       if (sinks.length > 0) {
         if (sources.length > 0) {
+          if (this.profile.multiPick) {
+            // 有段・プロ: 離れた石も続けてクリックして、埋める点の数までまとめて持つ（近い順）
+            const limit = Math.min(this.profile.batch, sinks.length, p.handRoom);
+            const tour = this.tour(sources.filter((i) => p.canPick(i)), limit);
+            if (tour.length > 1) return this.sequence(tour, (i) => p.pickUp([i]));
+          }
           const picked = this.grabSources(sources, sinks).filter((i) => p.canPick(i));
           if (picked.length > 0) {
             return {
@@ -282,9 +310,8 @@ export class Cpu {
         } else {
           // color の石は、相手（opponent(color)）のトレイにある
           const owner = opponent(color);
-          // プロは、いちばん長く並んだ埋める点の分だけ持つ（なぞって一気に置く）
-          const want = this.profile.swipe ? Math.max(1, longestRun(sinks, p.board.size).length) : sinks.length;
-          const count = Math.min(this.profile.batch, want, p.handRoom, p.position.trays[owner]);
+          // 埋める点の数まで、まとめて持つ（プロは持てるだけ持って、並んだ所はなぞり、離れた所はばらまく）
+          const count = Math.min(this.profile.batch, sinks.length, p.handRoom, p.position.trays[owner]);
           if (count > 0 && p.canUseTray(owner)) {
             const misplace = this.chance(this.profile.mistake);
             return {
@@ -384,6 +411,15 @@ export class Cpu {
         }));
         return { action: { kind: "swipe", points: run }, steps, run: () => steps.every((st) => st.run()) };
       }
+      // 並んでいなければ、持っている石を近い順に続けてばらまく
+      const tour = this.tour(sinks, held);
+      if (tour.length > 1) {
+        return this.sequence(tour, (point) => {
+          if (!p.placeAt(point, color)) return false;
+          this.placed.add(point);
+          return true;
+        });
+      }
     }
     if (sinks.length > 0) {
       const sink = this.profile.efficient && this.cursor !== null ? nearest(sinks, this.cursor, p.board.size) : sinks[0];
@@ -434,6 +470,36 @@ export class Cpu {
     );
     this.layouts.set(color, layout);
     return layout;
+  }
+
+  /** from（直前の点）から、いちばん近い点を順にたどる（最大 limit 点）。 */
+  private tour(points: number[], limit: number): number[] {
+    const size = this.player.board.size;
+    const rest = [...points];
+    const order: number[] = [];
+    let at = this.cursor ?? rest[0];
+    while (rest.length > 0 && order.length < limit) {
+      const next = nearest(rest, at, size);
+      rest.splice(rest.indexOf(next), 1);
+      order.push(next);
+      at = next;
+    }
+    return order;
+  }
+
+  /** 離れた点を続けてクリックする操作。カーソルが遠くへ動くときほど次の点まで間をあける。 */
+  private sequence(points: number[], act: (point: number) => boolean): CpuPlan {
+    const size = this.player.board.size;
+    const steps = points.map((point, k) => ({
+      point,
+      delay: k === 0 ? 0 : 60 + 25 * distance(points[k - 1], point, size),
+      run: () => {
+        if (!act(point)) return false;
+        this.cursor = point;
+        return true;
+      },
+    }));
+    return { action: { kind: "sequence", points }, steps, run: () => steps.every((st) => st.run()) };
   }
 
   /**
