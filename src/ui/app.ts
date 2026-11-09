@@ -8,12 +8,13 @@ import { BLACK, Board, Color, EMPTY, WHITE, opponent } from "../core/board";
 import { mulberry32, randomSeed, seedNumber } from "../core/random";
 import { dummyPosition } from "../game/dummy";
 import { DEFAULT_SHAPE_RULES, type ShapeRules } from "../core/shapes";
-import { CPU_LEVELS, Cpu, CpuAction, CpuLevel, isCpuLevel } from "../game/cpu";
+import { CPU_LEVELS, Cpu, CpuAction, CpuLevel, toCpuLevel } from "../game/cpu";
 import { planLayout, planLayouts, SerializedLayout } from "../game/layout";
 import { DEFAULT_HAND_LIMIT, Match, Player, byDistanceFrom } from "../game/match";
 import { PENALTY_MS, Session } from "../game/session";
 import { BoardView } from "./boardView";
 import { TRAY_SLOTS, TrayView } from "./trayView";
+import { CpuCursorDriver } from "./cpuDriver";
 import { CpuRecord, CpuResult, SoloRecord, addCpuRecord, addSoloRecord, loadScores, soloRanking } from "./scores";
 import { shareOnX } from "./share";
 
@@ -43,8 +44,6 @@ interface Settings {
   fillDame?: boolean;
 }
 
-/** CPU のカーソルが操作する場所へ動く時間（CSS の .cpu-cursor の transition と合わせる）。 */
-const CURSOR_TRAVEL_MS = 250;
 
 /** 棋譜の再生にかける時間。 */
 const REPLAY_MS = 10_000;
@@ -928,13 +927,15 @@ function showGame(
     showGiveUpResult();
     const auto = new Cpu(session, layouts ?? {});
     autoCursor.hidden = false;
-    moveCursor(autoCursor, auto, null);
+    const autoDriver = new CpuCursorDriver(autoCursor, auto, locate, () => render());
+    cleanups.push(() => autoDriver.dispose());
+    autoDriver.moveTo(null);
     let idle = 0;
     let busy = false;
     const autoTimer = window.setInterval(() => {
       if (busy) return;
       busy = true;
-      cpuTurn(autoCursor, auto, (action) => {
+      autoDriver.turn((action) => {
         busy = false;
         render();
         if (session.phase === "finished") {
@@ -1141,58 +1142,25 @@ function showGame(
   // --- CPU ---
   let cpuWaiting = false;
   /** CPU のカーソルを、操作した点（またはトレイ）へ動かす。 */
-  const moveCpuCursor = (action: CpuAction | null) => {
-    if (cpu) moveCursor(cpuCursor, cpu, action);
-  };
-  const moveCursor = (cursor: HTMLElement, cpu: Cpu, action: CpuAction | null) => {
-    let target: { x: number; y: number } | null = null;
-    if (action && "point" in action) {
+  /** CPU の操作の場所の画面座標（盤の点、トレイ。場所がなければ盤の中央）。 */
+  const locate = (action: CpuAction | null) => {
+    const point = action?.kind === "swipe" ? action.points[0] : action && "point" in action ? action.point : null;
+    if (point !== null) {
       const box = view.svg.getBoundingClientRect();
-      const { x, y } = view.pointBox(action.point);
-      target = { x: box.left + x, y: box.top + y };
-    } else if (action?.kind === "pick-tray" || action?.kind === "drop-tray") {
+      const { x, y } = view.pointBox(point);
+      return { x: box.left + x, y: box.top + y };
+    }
+    if (action?.kind === "pick-tray" || action?.kind === "drop-tray") {
       const box = trays[action.owner].view.svg.getBoundingClientRect();
-      target = { x: box.left + 20, y: box.top + 15 };
-    } else if (!cursor.style.transform) {
-      const box = view.svg.getBoundingClientRect();
-      target = { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+      return { x: box.left + 20, y: box.top + 15 };
     }
-    if (target) cursor.style.transform = `translate(${target.x}px, ${target.y}px)`;
-    showHeld(cursor, cpu);
+    if (action) return null;
+    const box = view.svg.getBoundingClientRect();
+    return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
   };
-  /** カーソルに、CPU が持っている石を表示する。 */
-  const showHeld = (cursor: HTMLElement, cpu: Cpu) => {
-    const held = cpu.player.hand?.stones[0];
-    cursor.classList.toggle("holding-black", held?.color === BLACK);
-    cursor.classList.toggle("holding-white", held?.color === WHITE);
-  };
-
-  /**
-   * CPU の 1 回の操作。先にカーソルを操作する場所へ動かし、着いてから（CURSOR_TRAVEL_MS 後に）
-   * 盤やトレイの石を動かす。石がカーソルより先に動いて見えないようにするため。
-   */
-  const cpuTurn = (cursor: HTMLElement, player: Cpu, after: (action: CpuAction) => void) => {
-    const plan = player.decide();
-    moveCursor(cursor, player, plan.action);
-    const finish = () => {
-      plan.run?.();
-      showHeld(cursor, player);
-      after(plan.action);
-    };
-    if (plan.action.kind === "idle") {
-      finish();
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      pendingTimers.delete(timer);
-      finish();
-    }, CURSOR_TRAVEL_MS);
-    pendingTimers.add(timer);
-  };
-  const pendingTimers = new Set<number>();
-  cleanups.push(() => {
-    for (const timer of pendingTimers) window.clearTimeout(timer);
-  });
+  const cpuDriver = cpu ? new CpuCursorDriver(cpuCursor, cpu, locate, () => render()) : null;
+  cleanups.push(() => cpuDriver?.dispose());
+  const moveCpuCursor = (action: CpuAction | null) => cpuDriver?.moveTo(action);
 
   const startCpu = () => {
     if (!cpu) return;
@@ -1204,7 +1172,7 @@ function showGame(
       busy = true;
       const before = session.penalties;
       const cpuBefore = cpu!.player.penalties;
-      cpuTurn(cpuCursor, cpu!, (action) => {
+      cpuDriver!.turn((action) => {
         busy = false;
         cpuWaiting = action.kind === "idle" && cpu!.player.phase === "arrange";
         penaltyCheck(before);
@@ -1423,17 +1391,16 @@ function formatTime(ms: number): string {
 
 const MISTAKE_TEXT: Record<CpuLevel, string> = {
   beginner: "石は 1 個ずつ、整地ミスや無駄な操作が多い",
-  easy: "石は 1 個ずつ、ときどき整地ミスや無駄な操作をする",
-  normal: "石を 2 個まで持つ、たまに整地ミスや無駄な操作をする",
-  hard: "石を 4 個まで持つ、ミスや無駄な操作はまれ",
-  expert: "石を 6 個まで持つ、ミスや無駄な操作をしない",
+  novice: "石を 2 個まで持つ、ときどき整地ミスや無駄な操作をする",
+  dan: "石を 6 個まで持つ、ミスや無駄な操作をしない",
+  pro: "長く並んだ所（大きい塊）からまとめて持ち、なぞって一気に置く。ミスなし",
 };
 
 function defaultSettings(): Settings {
   return {
     mode: "solo",
     myColor: BLACK,
-    cpuLevel: "normal",
+    cpuLevel: "novice",
     restricted: true,
     size: 19,
     undoOnPenalty: true,
@@ -1459,7 +1426,7 @@ function normalizeSettings(saved: Partial<Settings>): Settings {
   const fallback = defaultSettings();
   try {
     const settings: Settings = { ...fallback, ...saved, seed: saved.seed ?? fallback.seed };
-    if (!isCpuLevel(settings.cpuLevel)) settings.cpuLevel = fallback.cpuLevel;
+    settings.cpuLevel = toCpuLevel(settings.cpuLevel) ?? fallback.cpuLevel;
     settings.handLimit = clampHandLimit(settings.handLimit);
     const rules: Partial<ShapeRules> = saved.shapeRules ?? {};
     settings.shapeRules = {
@@ -1567,7 +1534,7 @@ function showScoreboard(root: HTMLElement, size: number, tab: "solo" | "cpu"): v
             h("span", { class: `score-result ${r.result}` }, [RESULT_LABEL[r.result]]),
             h("div", { class: "score-main" }, [
               h("div", { class: "score-head" }, [
-                h("strong", {}, [`CPU ${CPU_LEVELS[r.settings.cpuLevel]?.label ?? r.settings.cpuLevel}`]),
+                h("strong", {}, [`CPU ${CPU_LEVELS[toCpuLevel(r.settings.cpuLevel) ?? "novice"].label}`]),
                 h("span", {}, [`${r.settings.myColor === BLACK ? "黒" : "白"}番・${r.size} 路`]),
                 h("span", {}, [`あなた ${r.myTime === null ? "未完了" : formatTime(r.myTime)}・CPU ${r.cpuTime === null ? "未完了" : formatTime(r.cpuTime)}`]),
                 h("span", { class: "score-date" }, [formatDate(r.date)]),
@@ -1607,7 +1574,7 @@ function soloShareText(r: SoloRecord<Settings>, rank: number | null): string {
 
 /** vs CPU の戦績のシェア文。 */
 function cpuShareText(r: CpuRecord<Settings>): string {
-  const level = CPU_LEVELS[r.settings.cpuLevel]?.label ?? r.settings.cpuLevel;
+  const level = CPU_LEVELS[toCpuLevel(r.settings.cpuLevel) ?? "novice"].label;
   const time = (ms: number | null) => (ms === null ? "未完了" : formatSeconds(ms));
   const outcome = r.result === "win" ? "に勝ちました！" : r.result === "lose" ? "に負けました…" : "にギブアップしました…";
   return `vs CPU（${level}・${r.size} 路）${outcome} あなた ${time(r.myTime)}・CPU ${time(r.cpuTime)}${seedText(r.settings)}`;

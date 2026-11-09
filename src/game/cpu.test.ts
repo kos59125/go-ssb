@@ -114,9 +114,9 @@ describe("Cpu", () => {
     });
   }
 
-  it("達人の CPU はミスをしない", () => {
+  it("有段の CPU はミスをしない", () => {
     for (let seed = 1; seed <= 10; seed++) {
-      const { human, cpuPlayer, cpu } = setup(BLACK, "expert", seed);
+      const { human, cpuPlayer, cpu } = setup(BLACK, "dan", seed);
       human.capture(1 * 11 + 1);
       let steps = 0;
       while (cpuPlayer.phase !== "finished" && steps < 200) {
@@ -175,9 +175,9 @@ describe("Cpu", () => {
       }
       return { steps, maxHand };
     };
-    const expert = run("expert");
+    const expert = run("dan");
     expect(expert.maxHand).toBeGreaterThan(1);
-    expect(expert.steps).toBeLessThan(run("easy").steps);
+    expect(expert.steps).toBeLessThan(run("novice").steps);
   });
 
   it("CPU も一度に持てる石の上限を守る", () => {
@@ -185,7 +185,7 @@ describe("Cpu", () => {
     const match = new Match(position, { undoOnPenalty: true });
     const human = new Player(match, { color: BLACK });
     const cpuPlayer = new Player(match, { color: WHITE, handLimit: 2 });
-    const cpu = new Cpu(cpuPlayer, planLayouts(position), { level: "expert" });
+    const cpu = new Cpu(cpuPlayer, planLayouts(position), { level: "dan" });
     match.begin();
     human.capture(1 * 11 + 1);
     let steps = 0;
@@ -215,6 +215,25 @@ describe("Cpu", () => {
       }
       expect(cpuPlayer.phase, level).toBe("finished");
     }
+  });
+
+  it("プロは長く並んだ埋める点からなぞって置き、有段より少ない操作で整地する", () => {
+    const run = (level: CpuLevel) => {
+      const { human, cpuPlayer, cpu } = setup(BLACK, level);
+      human.capture(1 * 11 + 1);
+      let steps = 0;
+      let swipes = 0;
+      while (cpuPlayer.phase !== "finished" && steps < 300) {
+        if (cpu.step().kind === "swipe") swipes++;
+        steps++;
+      }
+      expect(cpuPlayer.phase, level).toBe("finished");
+      expect(cpuPlayer.penalties).toBe(0);
+      return { steps, swipes };
+    };
+    const master = run("pro");
+    expect(master.swipes).toBeGreaterThan(0);
+    expect(master.steps).toBeLessThan(run("dan").steps);
   });
 });
 

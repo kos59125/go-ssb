@@ -1222,3 +1222,8 @@ button.share-x {
 .dame-figure .board {
   pointer-events: none;
 }
+
+/* CPU がなぞって置くときは、カーソルを速く動かす（cpuDriver の SWIPE_STEP_MS と合わせる） */
+.cpu-cursor.swiping {
+  transition: transform 0.09s linear;
+}

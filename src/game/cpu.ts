@@ -11,6 +11,8 @@ export type CpuAction =
   | { kind: "pick"; point: number }
   | { kind: "pick-tray"; owner: Color }
   | { kind: "place"; point: number }
+  /** 持っている石を、直線に並んだ点へなぞって続けて置く（プロ）。 */
+  | { kind: "swipe"; points: number[] }
   | { kind: "drop-tray"; owner: Color }
   | { kind: "complete" };
 
@@ -21,6 +23,8 @@ export type CpuAction =
 export interface CpuPlan {
   action: CpuAction;
   run?: () => boolean;
+  /** なぞって置くときの 1 点ずつの操作（画面ではカーソルを動かしながら順に行う）。run はこれをまとめて行う。 */
+  steps?: { point: number; run: () => boolean }[];
 }
 
 const IDLE: CpuPlan = { action: { kind: "idle" } };
@@ -41,20 +45,33 @@ export interface CpuProfile {
   batch: number;
   /** 直前に操作した点から近い順に石を動かすか（カーソルの移動が少ない）。 */
   efficient: boolean;
+  /**
+   * 人のように、大きい塊から進めるか: 直線に長く並んだ埋める点（区間の壁）から、
+   * その長さの分だけアゲハマをまとめて持ち、なぞって一気に置く。
+   */
+  swipe?: boolean;
 }
 
 /** CPU の強さ。仕様書 §3.1.1 */
 export const CPU_LEVELS = {
   beginner: { label: "入門", interval: 3000, mistake: 0.1, waste: 0.25, batch: 1, efficient: false },
-  easy: { label: "やさしい", interval: 2200, mistake: 0.05, waste: 0.15, batch: 1, efficient: false },
-  normal: { label: "ふつう", interval: 1500, mistake: 0.02, waste: 0.08, batch: 2, efficient: true },
-  hard: { label: "つよい", interval: 1000, mistake: 0.005, waste: 0.03, batch: 4, efficient: true },
-  expert: { label: "達人", interval: 600, mistake: 0, waste: 0, batch: 6, efficient: true },
+  novice: { label: "初級", interval: 1800, mistake: 0.03, waste: 0.1, batch: 2, efficient: true },
+  dan: { label: "有段", interval: 600, mistake: 0, waste: 0, batch: 6, efficient: true },
+  pro: { label: "プロ", interval: 450, mistake: 0, waste: 0, batch: 10, efficient: true, swipe: true },
 } as const satisfies Record<string, CpuProfile>;
 export type CpuLevel = keyof typeof CPU_LEVELS;
 
 export function isCpuLevel(value: unknown): value is CpuLevel {
   return typeof value === "string" && value in CPU_LEVELS;
+}
+
+/** 以前の強さの名前（保存した設定やスコアボードの記録に残っているもの）を、今の強さに読み替える。 */
+const LEGACY_LEVELS: Record<string, CpuLevel> = { easy: "novice", normal: "novice", hard: "dan", expert: "dan", master: "pro" };
+
+/** 保存されていた強さを今の強さにする。分からなければ undefined。 */
+export function toCpuLevel(value: unknown): CpuLevel | undefined {
+  if (isCpuLevel(value)) return value;
+  return typeof value === "string" ? LEGACY_LEVELS[value] : undefined;
 }
 
 export interface CpuOptions {
@@ -259,7 +276,9 @@ export class Cpu {
         } else {
           // color の石は、相手（opponent(color)）のトレイにある
           const owner = opponent(color);
-          const count = Math.min(this.profile.batch, sinks.length, p.handRoom, p.position.trays[owner]);
+          // プロは、いちばん長く並んだ埋める点の分だけ持つ（なぞって一気に置く）
+          const want = this.profile.swipe ? Math.max(1, longestRun(sinks, p.board.size).length) : sinks.length;
+          const count = Math.min(this.profile.batch, want, p.handRoom, p.position.trays[owner]);
           if (count > 0 && p.canUseTray(owner)) {
             const misplace = this.chance(this.profile.mistake);
             return {
@@ -344,6 +363,22 @@ export class Cpu {
     }
     const plan = this.validPlan(color);
     const sinks = (plan ? this.diff(plan).sinks : []).filter((i) => p.canPlace(i));
+    if (this.profile.swipe && sinks.length > 1) {
+      const held = p.hand!.stones.filter((st) => st.color === color).length;
+      const run = longestRun(sinks, p.board.size, this.cursor).slice(0, held);
+      if (run.length > 1) {
+        const steps = run.map((point) => ({
+          point,
+          run: () => {
+            if (!p.placeAt(point, color)) return false;
+            this.placed.add(point);
+            this.cursor = point;
+            return true;
+          },
+        }));
+        return { action: { kind: "swipe", points: run }, steps, run: () => steps.every((st) => st.run()) };
+      }
+    }
     if (sinks.length > 0) {
       const sink = this.profile.efficient && this.cursor !== null ? nearest(sinks, this.cursor, p.board.size) : sinks[0];
       return placeAt(sink, () => {
@@ -448,6 +483,31 @@ export class Cpu {
     }
     return { sinks, sources };
   }
+}
+
+/**
+ * 埋める点のうち、縦か横にいちばん長く連続して並んだもの（区間の壁など、大きい塊から）。
+ * 長さが同じなら from に近いもの。並びの向きは from に近い端から。
+ */
+function longestRun(points: number[], size: number, from: number | null = null): number[] {
+  const set = new Set(points);
+  let best: number[] = [];
+  const near = (run: number[]) => (from === null ? 0 : Math.min(distance(run[0], from, size), distance(run.at(-1)!, from, size)));
+  for (const start of points) {
+    for (const [dx, dy] of [[1, 0], [0, 1]]) {
+      // 並びの始まりの点からだけ数える
+      const px = (start % size) - dx;
+      const py = Math.floor(start / size) - dy;
+      if (px >= 0 && py >= 0 && set.has(py * size + px)) continue;
+      const run: number[] = [];
+      for (let x = start % size, y = Math.floor(start / size); x < size && y < size && set.has(y * size + x); x += dx, y += dy) {
+        run.push(y * size + x);
+      }
+      if (run.length > best.length || (run.length === best.length && near(run) < near(best))) best = run;
+    }
+  }
+  if (from !== null && best.length > 1 && distance(best.at(-1)!, from, size) < distance(best[0], from, size)) best.reverse();
+  return best;
 }
 
 function distance(a: number, b: number, size: number): number {
