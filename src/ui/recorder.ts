@@ -1,11 +1,14 @@
 import { BLACK, Color, WHITE } from "../core/board";
+import { ArrayBufferTarget, Muxer } from "mp4-muxer";
 import { SITE_URL } from "./share";
 
 /**
  * 対局のようすを動画にする（仕様書 §2.11）。
  *
  * 対局中は、盤・アゲハマ・印・CPU のカーソル・タイマーが変わったときだけ、その状態を時刻付きで記録する。
- * 終わったら、その記録を canvas に描き直しながら MediaRecorder で録画する（ブラウザーの中だけで作る）。
+ * 終わったら、その記録を canvas に 1 コマずつ描き直して動画にする（ブラウザーの中だけで作る）。
+ * WebCodecs（VideoEncoder）が使えれば 1 コマずつ符号化して MP4 にする（実時間を待たないので速く、
+ * 作っている間にページが裏に回ってもコマが抜けない）。使えなければ MediaRecorder で実時間で録画する。
  * 映すのは碁盤とアゲハマだけ。タイム（黒・白それぞれ、先に終わった方はそこで止める）は碁盤の上の帯に出し、
  * 最後に結果を重ねる。早送りはせず、
  * 動画は最大 5 分（それより長い対局は動画にしない）。
@@ -113,6 +116,8 @@ export interface VideoOptions {
   /** 最後に出す結果（例: 「整地完了！」と「0:54.6（ペナルティ 1 回）」）。 */
   result: string[];
   onProgress?: (done: number, total: number) => void;
+  /** true を返したら作るのをやめる（ダイアログを閉じたとき）。 */
+  shouldStop?: () => boolean;
 }
 
 export interface VideoFile {
@@ -139,8 +144,9 @@ export function fitsVideo(recorder: GameRecorder): boolean {
   return recorder.length > 0 && recorder.duration + END_MS <= MAX_VIDEO_MS;
 }
 
-/** このブラウザーで動画にできるか（canvas の録画と MediaRecorder があるか）。 */
+/** このブラウザーで動画にできるか（WebCodecs、または canvas の録画と MediaRecorder があるか）。 */
 export function canRecordVideo(): boolean {
+  if (typeof VideoEncoder !== "undefined" && typeof VideoFrame !== "undefined") return true;
   return (
     typeof MediaRecorder !== "undefined" &&
     typeof HTMLCanvasElement !== "undefined" &&
@@ -162,8 +168,94 @@ function pickType(): { type: string; extension: string } | null {
   return candidates.find((c) => MediaRecorder.isTypeSupported(c.type)) ?? null;
 }
 
-/** 記録から動画を作る。作るのに、できあがる動画と同じくらいの時間がかかる。 */
+/** 作るのをやめた。 */
+export class VideoCancelled extends Error {
+  constructor() {
+    super("cancelled");
+  }
+}
+
+/** WebCodecs で使う H.264 の設定（Baseline、レベル 3.1。720 × 864、30 fps に足りる）。 */
+const AVC_CONFIG: VideoEncoderConfig = {
+  codec: "avc1.42001f",
+  width: WIDTH,
+  height: HEIGHT,
+  bitrate: 4_000_000,
+  framerate: FPS,
+};
+
+/** 記録から動画を作る。WebCodecs が使えれば 1 コマずつ符号化し、使えなければ実時間で録画する。 */
 export async function makeVideo(recorder: GameRecorder, options: VideoOptions): Promise<VideoFile> {
+  if (!fitsVideo(recorder)) throw new Error("5 分を超える対局は動画にできません");
+  if (await canEncodeFrames()) return encodeFrames(recorder, options);
+  return recordRealtime(recorder, options);
+}
+
+async function canEncodeFrames(): Promise<boolean> {
+  if (typeof VideoEncoder === "undefined" || typeof VideoFrame === "undefined") return false;
+  try {
+    return (await VideoEncoder.isConfigSupported(AVC_CONFIG)).supported === true;
+  } catch {
+    return false;
+  }
+}
+
+/** 1 コマずつ描いて VideoEncoder で符号化し、MP4 にまとめる。 */
+async function encodeFrames(recorder: GameRecorder, options: VideoOptions): Promise<VideoFile> {
+  const canvas = document.createElement("canvas");
+  canvas.width = WIDTH;
+  canvas.height = HEIGHT;
+  const ctx = canvas.getContext("2d")!;
+  const muxer = new Muxer({
+    target: new ArrayBufferTarget(),
+    video: { codec: "avc", width: WIDTH, height: HEIGHT, frameRate: FPS },
+    fastStart: "in-memory",
+  });
+  let failure: unknown = null;
+  const encoder = new VideoEncoder({
+    output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+    error: (e) => (failure = e),
+  });
+  encoder.configure(AVC_CONFIG);
+
+  const playMs = recorder.duration;
+  const total = playMs + END_MS;
+  const frames = Math.ceil((total / 1000) * FPS);
+  const frameUs = 1_000_000 / FPS;
+  try {
+    for (let i = 0; i < frames; i++) {
+      if (failure) throw failure;
+      if (options.shouldStop?.()) throw new VideoCancelled();
+      const t = (i * 1000) / FPS;
+      draw(ctx, recorder, Math.min(t, playMs), options, t >= playMs);
+      const frame = new VideoFrame(canvas, { timestamp: Math.round(i * frameUs), duration: Math.round(frameUs) });
+      // 2 秒ごとにキーフレーム（途中から再生・シークしやすいように）
+      encoder.encode(frame, { keyFrame: i % (FPS * 2) === 0 });
+      frame.close();
+      // 符号化が追いつくまで待つ（メモリを使いすぎないように）。ときどき画面にも処理を返す
+      while (encoder.encodeQueueSize > 8) await new Promise((r) => setTimeout(r, 1));
+      if (i % 10 === 0) {
+        options.onProgress?.(t, total);
+        await new Promise((r) => setTimeout(r, 0));
+      }
+    }
+    await encoder.flush();
+    if (failure) throw failure;
+  } finally {
+    if (encoder.state !== "closed") encoder.close();
+  }
+  muxer.finalize();
+  options.onProgress?.(total, total);
+  const blob = new Blob([muxer.target.buffer], { type: "video/mp4" });
+  return { blob, extension: "mp4", type: "video/mp4" };
+}
+
+/**
+ * canvas を MediaRecorder で実時間で録画する（WebCodecs がないとき）。
+ * ページが裏に回ると描き直しが止まり、その間が止まった映像になるので、裏にいる間は録画を一時停止し、
+ * 動画の中の時間も進めない。描き直しが遅れたときも、動画の中の時間は 1 コマ分ずつしか進めない。
+ */
+async function recordRealtime(recorder: GameRecorder, options: VideoOptions): Promise<VideoFile> {
   const format = pickType();
   if (!format) throw new Error("このブラウザーは動画の作成に対応していません");
   const canvas = document.createElement("canvas");
@@ -178,30 +270,47 @@ export async function makeVideo(recorder: GameRecorder, options: VideoOptions): 
   };
   const stopped = new Promise<void>((resolve) => (media.onstop = () => resolve()));
 
-  if (!fitsVideo(recorder)) throw new Error("5 分を超える対局は動画にできません");
   // 早送りはしない（対局の時間そのまま）
   const playMs = recorder.duration;
   const total = playMs + END_MS;
+  const onVisibility = () => {
+    if (document.hidden && media.state === "recording") media.pause();
+    else if (!document.hidden && media.state === "paused") media.resume();
+  };
+  document.addEventListener("visibilitychange", onVisibility);
 
   draw(ctx, recorder, 0, options, false);
   media.start(250);
-  const start = performance.now();
-  await new Promise<void>((resolve) => {
-    const frame = () => {
-      const elapsed = performance.now() - start;
-      options.onProgress?.(Math.min(elapsed, total), total);
-      if (elapsed >= total) {
-        resolve();
-        return;
-      }
-      draw(ctx, recorder, Math.min(elapsed, playMs), options, elapsed >= playMs);
+  if (document.hidden) media.pause();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      let elapsed = 0;
+      let last = performance.now();
+      const frame = () => {
+        const now = performance.now();
+        // 裏にいた間や、描き直しが大きく遅れた間は、動画の中の時間を進めない
+        if (!document.hidden) elapsed += Math.min(now - last, 1000 / FPS * 2);
+        last = now;
+        if (options.shouldStop?.()) {
+          reject(new VideoCancelled());
+          return;
+        }
+        options.onProgress?.(Math.min(elapsed, total), total);
+        if (elapsed >= total) {
+          resolve();
+          return;
+        }
+        draw(ctx, recorder, Math.min(elapsed, playMs), options, elapsed >= playMs);
+        requestAnimationFrame(frame);
+      };
       requestAnimationFrame(frame);
-    };
-    requestAnimationFrame(frame);
-  });
-  media.stop();
-  await stopped;
-  for (const track of stream.getTracks()) track.stop();
+    });
+  } finally {
+    document.removeEventListener("visibilitychange", onVisibility);
+    if (media.state !== "inactive") media.stop();
+    await stopped;
+    for (const track of stream.getTracks()) track.stop();
+  }
   const type = format.type.split(";")[0];
   return { blob: new Blob(chunks, { type }), extension: format.extension, type };
 }

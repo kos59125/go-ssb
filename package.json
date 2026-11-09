@@ -17,6 +17,7 @@
     "vitest": "^5.0.3"
   },
   "dependencies": {
+    "mp4-muxer": "^5.2.2",
     "onnxruntime-web": "^1.30.0"
   }
 }

@@ -27,6 +27,7 @@ export function openVideoDialog(root: HTMLElement, recorder: GameRecorder, resul
   dialog.addEventListener("close", () => (cancelled = true));
   void makeVideo(recorder, {
     result,
+    shouldStop: () => cancelled,
     onProgress: (done, total) => {
       bar.value = done / total;
       status.textContent = `動画を作っています… ${Math.floor(done / 1000)} / ${Math.ceil(total / 1000)} 秒`;
