@@ -1227,3 +1227,21 @@ button.share-x {
 .cpu-cursor.swiping {
   transition: transform 0.09s linear;
 }
+
+/* 観戦モード: 黒の CPU は墨色、白の CPU は青のカーソル */
+.cpu-cursor.side-black::before {
+  border-left-color: #2b2620;
+  border-top-color: #2b2620;
+}
+
+.cpu-cursor.side-black .cpu-cursor-label {
+  background: #2b2620;
+}
+
+.cpu-status.side-black {
+  color: #2b2620;
+}
+
+.watch .status .cpu-status:empty {
+  display: none;
+}

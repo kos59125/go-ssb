@@ -13,17 +13,21 @@ import { planLayout, planLayouts, SerializedLayout } from "../game/layout";
 import { DEFAULT_HAND_LIMIT, Match, Player, byDistanceFrom } from "../game/match";
 import { PENALTY_MS, Session } from "../game/session";
 import { BoardView } from "./boardView";
-import { TRAY_SLOTS, TrayView } from "./trayView";
+import { TRAY_SLOTS } from "./trayView";
+import { formatTime, h, makeCursor, trayElement } from "./dom";
 import { CpuCursorDriver } from "./cpuDriver";
+import { showWatch } from "./watch";
 import { CpuRecord, CpuResult, SoloRecord, addCpuRecord, addSoloRecord, loadScores, soloRanking } from "./scores";
 import { shareOnX } from "./share";
 
 interface Settings {
   /** ひとりで / vs CPU（仕様書 §3）。 */
-  mode: "solo" | "cpu";
+  mode: "solo" | "cpu" | "watch";
   /** vs CPU で自分が持つ石の色。相手の地を整地する。 */
   myColor: Color;
   cpuLevel: CpuLevel;
+  /** 観戦モードの黒・白それぞれの CPU の強さ。 */
+  watchLevels: Record<Color, CpuLevel>;
   /** vs CPU で、担当外の石を操作できないようにするか。 */
   restricted: boolean;
   size: number;
@@ -68,6 +72,9 @@ function showSettings(root: HTMLElement, settings: Settings): void {
   const small = isSmallScreen();
   if (small && settings.size === 19) settings.size = 13;
   const levels = Object.keys(CPU_LEVELS) as CpuLevel[];
+  const levelHelp =
+    "強さによって、CPU が 1 回操作する間隔と、ミスの多さが変わります。\n" +
+    levels.map((level) => `${CPU_LEVELS[level].label}: ${CPU_LEVELS[level].interval / 1000} 秒ごと、${MISTAKE_TEXT[level]}`).join("\n");
   root.replaceChildren(
     h("main", { class: "settings" }, [
       h("h1", {}, ["囲碁スピード整地バトル"]),
@@ -77,8 +84,9 @@ function showSettings(root: HTMLElement, settings: Settings): void {
           radios("mode", [
             { value: "solo", label: "ひとりで", checked: settings.mode === "solo" },
             { value: "cpu", label: "vs CPU", checked: settings.mode === "cpu" },
+            { value: "watch", label: "観戦", checked: settings.mode === "watch" },
           ]),
-          "ひとりで: 黒地と白地を両方整地して、タイムを競います。\nvs CPU: 相手の地を整地します。ペナルティ込みのタイムが短い方が勝ちです。",
+          "ひとりで: 黒地と白地を両方整地して、タイムを競います。\nvs CPU: 相手の地を整地します。ペナルティ込みのタイムが短い方が勝ちです。\n観戦: CPU どうしの整地バトル（CPU vs CPU）を見ます。",
         ),
         setting(
           "自分の石",
@@ -95,9 +103,19 @@ function showSettings(root: HTMLElement, settings: Settings): void {
             "cpu-level",
             levels.map((level) => ({ value: level, label: CPU_LEVELS[level].label, checked: settings.cpuLevel === level })),
           ),
-          "強さによって、CPU が 1 回操作する間隔と、ミスの多さが変わります。\n" +
-            levels.map((level) => `${CPU_LEVELS[level].label}: ${CPU_LEVELS[level].interval / 1000} 秒ごと、${MISTAKE_TEXT[level]}`).join("\n"),
+          levelHelp,
           "cpu-only",
+        ),
+        ...([BLACK, WHITE] as const).map((c) =>
+          setting(
+            `${c === BLACK ? "黒" : "白"}の CPU`,
+            radios(
+              `watch-level-${c === BLACK ? "black" : "white"}`,
+              levels.map((level) => ({ value: level, label: CPU_LEVELS[level].label, checked: settings.watchLevels[c] === level })),
+            ),
+            levelHelp,
+            "watch-only",
+          ),
         ),
       ]),
       settingGroup("盤面", [
@@ -173,8 +191,8 @@ function showSettings(root: HTMLElement, settings: Settings): void {
           "一度に持てる石",
           [
             h("label", { class: "solo-only" }, [handLimitInput("hand-limit", settings.handLimit), "個"]),
-            h("label", { class: "cpu-only" }, ["黒", handLimitInput("hand-limit-black", settings.handLimits[BLACK]), "個"]),
-            h("label", { class: "cpu-only" }, ["白", handLimitInput("hand-limit-white", settings.handLimits[WHITE]), "個"]),
+            h("label", { class: "versus-only" }, ["黒", handLimitInput("hand-limit-black", settings.handLimits[BLACK]), "個"]),
+            h("label", { class: "versus-only" }, ["白", handLimitInput("hand-limit-white", settings.handLimits[WHITE]), "個"]),
           ],
           `範囲選択やトレイから、一度に持てる石の数の上限です（1〜${MAX_HAND_LIMIT} 個、初期値 ${DEFAULT_HAND_LIMIT} 個）。上限を超えるときは、選び始めた点に近い石から持ちます。\n` +
             "vs CPU では黒・白それぞれに設定でき、CPU にも適用します（CPU は強さに応じた数とこの上限の少ない方まで持ちます）。",
@@ -215,10 +233,13 @@ function showSettings(root: HTMLElement, settings: Settings): void {
   const sgfInfo = root.querySelector<HTMLParagraphElement>("#sgf-info")!;
   const startButton = root.querySelector<HTMLButtonElement>("#start-button")!;
   let record = settings.record;
-  const isCpu = () => selected("mode") === "cpu";
+  const mode = () => selected("mode") as Settings["mode"];
   const updateMode = () => {
-    for (const el of root.querySelectorAll<HTMLElement>(".cpu-only")) el.hidden = !isCpu();
-    for (const el of root.querySelectorAll<HTMLElement>(".solo-only")) el.hidden = isCpu();
+    const m = mode();
+    for (const el of root.querySelectorAll<HTMLElement>(".cpu-only")) el.hidden = m !== "cpu";
+    for (const el of root.querySelectorAll<HTMLElement>(".watch-only")) el.hidden = m !== "watch";
+    for (const el of root.querySelectorAll<HTMLElement>(".versus-only")) el.hidden = m === "solo";
+    for (const el of root.querySelectorAll<HTMLElement>(".solo-only")) el.hidden = m !== "solo";
   };
   for (const input of root.querySelectorAll<HTMLInputElement>('input[name="mode"]')) {
     input.addEventListener("change", updateMode);
@@ -275,9 +296,10 @@ function showSettings(root: HTMLElement, settings: Settings): void {
   });
   /** 画面で選んでいる設定。 */
   const readForm = (): Settings => ({
-    mode: isCpu() ? "cpu" : "solo",
+    mode: mode(),
     myColor: selected("my-color") === "white" ? WHITE : BLACK,
     cpuLevel: selected("cpu-level") as CpuLevel,
+    watchLevels: { [BLACK]: selected("watch-level-black") as CpuLevel, [WHITE]: selected("watch-level-white") as CpuLevel },
     restricted: selected("restricted") === "on",
     size: Number(selected("size")),
     undoOnPenalty: selected("undo") === "undo",
@@ -451,6 +473,18 @@ function showGame(
   nextSeed: string,
   layouts?: Record<Color, SerializedLayout | null>,
 ): void {
+  if (settings.mode === "watch") {
+    // 観戦モード（CPU vs CPU）は専用の画面
+    showWatch(
+      root,
+      settings,
+      position,
+      layouts ?? {},
+      () => void prepareGame(root, { ...settings, seed: nextSeed }),
+      () => showSettings(root, { ...settings, seed: nextSeed }),
+    );
+    return;
+  }
   const cpuMode = settings.mode === "cpu";
   const myColor = settings.myColor;
   const cpuColor = opponent(myColor);
@@ -1226,10 +1260,6 @@ function helpIcon(text: string, help: string): HTMLElement {
   ]);
 }
 
-/** CPU のカーソル（矢印と名前）。 */
-function makeCursor(label: string): HTMLDivElement {
-  return h("div", { class: "cpu-cursor" }, [h("span", { class: "cpu-cursor-label" }, [label])]);
-}
 
 /** 棋譜の説明（対局者・盤サイズ・手数）。結果は答えになるので出さない。 */
 function recordLabel(record: GameRecord): string {
@@ -1330,23 +1360,6 @@ function countDeadStones(session: Player): number {
   return onBoard + (session.hand?.stones.filter((s) => s.dead).length ?? 0);
 }
 
-/** who: 対戦でのトレイの持ち主の呼び名（「あなた」「CPU」）。 */
-function trayElement(owner: Color, who?: string) {
-  const name = `${who ?? (owner === BLACK ? "黒" : "白")}のアゲハマ（${owner === BLACK ? "白石" : "黒石"}）`;
-  const stoneColor = opponent(owner);
-  // 個数は目数（特にマイナス）の目安になるので表示しない
-  const count = h("span", { class: "tray-count" }, []);
-  const view = new TrayView(owner, stoneColor);
-  const root = h("div", { class: "tray" }, [
-    h("div", { class: "tray-title" }, [
-      h("span", { class: `tray-stone ${stoneColor === BLACK ? "black" : "white"}` }, []),
-      name,
-      count,
-    ]),
-    view.svg,
-  ]);
-  return { root, count, view };
-}
 
 /** 2 点を結ぶ線上の点（両端を含む、ブレゼンハムの方法）。 */
 function linePoints(size: number, a: number, b: number): number[] {
@@ -1382,12 +1395,6 @@ function pointsInRect(size: number, a: number, b: number): number[] {
   return points;
 }
 
-function formatTime(ms: number): string {
-  const total = Math.floor(ms / 100);
-  const minutes = Math.floor(total / 600);
-  const seconds = Math.floor((total % 600) / 10);
-  return `${minutes}:${String(seconds).padStart(2, "0")}.${total % 10}`;
-}
 
 const MISTAKE_TEXT: Record<CpuLevel, string> = {
   beginner: "石は 1 個ずつ、整地ミスや無駄な操作が多い",
@@ -1401,6 +1408,7 @@ function defaultSettings(): Settings {
     mode: "solo",
     myColor: BLACK,
     cpuLevel: "novice",
+    watchLevels: { [BLACK]: "dan", [WHITE]: "pro" },
     restricted: true,
     size: 19,
     undoOnPenalty: true,
@@ -1427,6 +1435,11 @@ function normalizeSettings(saved: Partial<Settings>): Settings {
   try {
     const settings: Settings = { ...fallback, ...saved, seed: saved.seed ?? fallback.seed };
     settings.cpuLevel = toCpuLevel(settings.cpuLevel) ?? fallback.cpuLevel;
+    settings.watchLevels = {
+      [BLACK]: toCpuLevel(saved.watchLevels?.[BLACK]) ?? fallback.watchLevels[BLACK],
+      [WHITE]: toCpuLevel(saved.watchLevels?.[WHITE]) ?? fallback.watchLevels[WHITE],
+    };
+    if (!["solo", "cpu", "watch"].includes(settings.mode)) settings.mode = fallback.mode;
     settings.handLimit = clampHandLimit(settings.handLimit);
     const rules: Partial<ShapeRules> = saved.shapeRules ?? {};
     settings.shapeRules = {
@@ -1634,13 +1647,3 @@ function seedNote(seed: string): HTMLElement {
   return h("p", { class: "note seed-note" }, ["シード: ", value, " ", copy]);
 }
 
-function h<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  attrs: Record<string, string>,
-  children: (Node | string)[],
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
-  node.append(...children);
-  return node;
-}
