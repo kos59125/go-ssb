@@ -100,3 +100,19 @@ describe("区間の形の設定", () => {
   });
   void WHITE;
 });
+
+describe("動かす石の少ない形（強い CPU）", () => {
+  it("中にある石を区切りに使い、石を動かさずに済む形を選ぶ", () => {
+    // 5x5 の黒地を、真ん中の列 (4,2..6) の黒石が 2x5 と 2x5 に分けている。空点 20、アゲハマなし → 20 目。
+    // 列の石をそのまま区切りに使えば、石を 1 個も動かさずに 2x5 が 2 つになる
+    const board = regionBoard(5, 5);
+    for (const y of [2, 3, 4, 5, 6]) board.set(4, y, BLACK);
+    const count = (optimize: boolean) => {
+      const l = planLayout(board, BLACK, 0, 60_000, undefined, optimize)!;
+      return [...l.area].filter((i) => l.empties.has(i) && board.cells[i] !== 0).length;
+    };
+    expect(count(true)).toBe(0);
+    expect(count(true)).toBeLessThanOrEqual(count(false));
+  });
+});
+
