@@ -199,7 +199,9 @@ export function showWatch(
 
   render();
   for (const c of sides) {
-    const driver = new CpuCursorDriver(cursors[c], cpus[c], locate, render);
+    // カーソルの最初の位置は、その CPU のアゲハマのトレイ
+    const home = () => locate({ kind: "pick-tray", owner: c });
+    const driver = new CpuCursorDriver(cursors[c], cpus[c], locate, render, home);
     drivers.push(driver);
     driver.moveTo(null);
   }

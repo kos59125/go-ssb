@@ -18,12 +18,14 @@ export class CpuCursorDriver {
   /**
    * @param locate 操作の場所の画面座標（盤の点やトレイ）。null なら動かさない
    * @param onStep なぞって置く途中で 1 点置くたびに呼ぶ（画面の描き直し用）
+   * @param home カーソルの最初の位置（例: CPU のアゲハマのトレイ）。なければ locate(null)（盤の中央など）
    */
   constructor(
     readonly cursor: HTMLElement,
     readonly cpu: Cpu,
     private readonly locate: (action: CpuAction | null) => { x: number; y: number } | null,
     private readonly onStep: () => void = () => {},
+    private readonly home?: () => { x: number; y: number } | null,
   ) {}
 
   /** カーソルを action の場所へ動かす（null なら、まだ置いていなければ盤の中央）。 */
@@ -32,8 +34,8 @@ export class CpuCursorDriver {
       this.point =
         action.kind === "swipe" || action.kind === "sequence" ? action.points[0] : "point" in action ? action.point : null;
     }
-    // action が null のときは、まだどこにも置いていなければ盤の中央など（locate が決める）
-    const target = action || !this.cursor.style.transform ? this.locate(action) : null;
+    // action が null のときは、まだどこにも置いていなければ最初の位置（home、なければ locate が決める）
+    const target = action ? this.locate(action) : !this.cursor.style.transform ? (this.home?.() ?? this.locate(null)) : null;
     if (target) this.cursor.style.transform = `translate(${target.x}px, ${target.y}px)`;
     this.showHeld();
   }

@@ -19,6 +19,11 @@
   display: none !important;
 }
 
+/* 横スワイプでの「戻る」「進む」を起こさない（ゲーム中の戻るは backGuard.ts でも止める） */
+html {
+  overscroll-behavior-x: none;
+}
+
 body {
   margin: 0;
   background: var(--bg);

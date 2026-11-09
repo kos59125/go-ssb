@@ -19,6 +19,7 @@ import { CpuCursorDriver } from "./cpuDriver";
 import { showWatch } from "./watch";
 import { GameRecorder, RecordedClock, RecordedCursor } from "./recorder";
 import { videoButton } from "./videoDialog";
+import { allowBack, blockBack } from "./backGuard";
 import { CpuRecord, CpuResult, SoloRecord, addCpuRecord, addSoloRecord, loadScores, soloRanking } from "./scores";
 import { shareOnX } from "./share";
 
@@ -99,6 +100,7 @@ function dummySeed(): number | null {
 }
 
 function showSettings(root: HTMLElement, settings: Settings): void {
+  allowBack();
   const small = isSmallScreen();
   if (small && settings.size === 19) settings.size = 13;
   const levels = Object.keys(CPU_LEVELS) as CpuLevel[];
@@ -363,6 +365,8 @@ function showSettings(root: HTMLElement, settings: Settings): void {
 
 /** 終局図を用意し、設定に応じて棋譜を再生してから対局を始める。 */
 async function prepareGame(root: HTMLElement, settings: Settings): Promise<void> {
+  // ゲーム中（終局図の準備から結果まで）は、ブラウザーの戻るでページを離れないようにする
+  blockBack();
   const seed = seedNumber(settings.seed);
   // 次のゲーム（「もう一度」）のシードを決めて、遊んでいる間に作っておく
   const nextSeed = randomSeed();
@@ -1316,7 +1320,9 @@ function showGame(
     const box = view.svg.getBoundingClientRect();
     return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
   };
-  const cpuDriver = cpu ? new CpuCursorDriver(cpuCursor, cpu, locate, () => render()) : null;
+  /** CPU のカーソルの最初の位置: CPU のアゲハマのトレイ（盤の中央だとタイマーなどに重なるため）。 */
+  const cpuHome = () => locate({ kind: "pick-tray", owner: cpuColor });
+  const cpuDriver = cpu ? new CpuCursorDriver(cpuCursor, cpu, locate, () => render(), cpuHome) : null;
   if (cpuDriver) recordedCursors = () => [{ label: "CPU", color: "#2f5d8a", point: cpuDriver.point }];
   cleanups.push(() => cpuDriver?.dispose());
   const moveCpuCursor = (action: CpuAction | null) => cpuDriver?.moveTo(action);
@@ -1629,6 +1635,7 @@ const RESULT_LABEL: Record<CpuResult, string> = { win: "勝ち", lose: "負け",
  * vs CPU は直近 10 戦。「再プレイ」で、その記録と同じ設定（シード・整地ルール・棋譜など）で始める。
  */
 function showScoreboard(root: HTMLElement, size: number, tab: "solo" | "cpu"): void {
+  allowBack();
   const scores = loadScores<Settings>();
   const replayButton = (saved: Settings) => {
     const button = h("button", { type: "button", class: "replay" }, ["再プレイ"]);
