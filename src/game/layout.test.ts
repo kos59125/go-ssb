@@ -102,6 +102,18 @@ describe("区間の形の設定", () => {
 });
 
 describe("動かす石の少ない形（強い CPU）", () => {
+  it("8x4−2（中央にナナメの 2 個）の形も使える", () => {
+    // 8x4 の黒地の中央に、ナナメに黒石 2 個。空点 30、アゲハマなし → 30 目。石を動かさずに 8x4−2 になる
+    const board = regionBoard(8, 4);
+    board.set(2 + 3, 2 + 1, BLACK);
+    board.set(2 + 4, 2 + 2, BLACK);
+    const layout = planLayout(board, BLACK, 0, 60_000, undefined, true)!;
+    expect(layout.empties.size).toBe(30);
+    expect(sectionShapes(board, layout.empties)).toEqual(["8x4:30"]);
+    expect(layout.empties.has((2 + 1) * board.size + 2 + 3)).toBe(false);
+    expect(layout.empties.has((2 + 2) * board.size + 2 + 4)).toBe(false);
+  });
+
   it("中にある石を区切りに使い、石を動かさずに済む形を選ぶ", () => {
     // 5x5 の黒地を、真ん中の列 (4,2..6) の黒石が 2x5 と 2x5 に分けている。空点 20、アゲハマなし → 20 目。
     // 列の石をそのまま区切りに使えば、石を 1 個も動かさずに 2x5 が 2 つになる

@@ -75,6 +75,59 @@ describe("classifySection: 10 の倍数の区間", () => {
     expect(sectionAt(board, 1, 1)).toEqual({ kind: "multiple", size: 40 });
   });
 
+  it("8x4−2（中央にナナメの 2 個）は 30 目。どちらのナナメでも、縦長でもよい", () => {
+    for (const rows of [
+      ["x...x....x", "x....x...x"],
+      ["x....x...x", "x...x....x"],
+    ]) {
+      const board = parseBoard(`
+        xxxxxxxxxx
+        x........x
+        ${rows[0]}
+        ${rows[1]}
+        x........x
+        xxxxxxxxxx
+      `);
+      expect(sectionAt(board, 1, 1)).toEqual({ kind: "multiple", size: 30 });
+    }
+    const tall = parseBoard(`
+      xxxxxx
+      x....x
+      x....x
+      x....x
+      x.x..x
+      x..x.x
+      x....x
+      x....x
+      x....x
+      xxxxxx
+    `);
+    expect(sectionAt(tall, 1, 1)).toEqual({ kind: "multiple", size: 30 });
+  });
+
+  it("8x4−2 で 2 個が中央のナナメでなければ不可", () => {
+    // 横に並べる
+    const side = parseBoard(`
+      xxxxxxxxxx
+      x........x
+      x....xx..x
+      x........x
+      x........x
+      xxxxxxxxxx
+    `);
+    expect(sectionAt(side, 1, 1).kind).toBe("invalid");
+    // ナナメだが中央からずれている
+    const off = parseBoard(`
+      xxxxxxxxxx
+      x........x
+      x....x...x
+      x.....x..x
+      x........x
+      xxxxxxxxxx
+    `);
+    expect(sectionAt(off, 1, 1).kind).toBe("invalid");
+  });
+
   it("4x4−6 は不可", () => {
     const board = parseBoard(`
       xxxxxx

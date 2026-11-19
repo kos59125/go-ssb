@@ -31,6 +31,11 @@ export const HOLE_PATTERNS: { w: number; h: number; holes: [number, number][] }[
   // 7x3−1 = 20
   { w: 7, h: 3, holes: [[3, 1]] },
   { w: 3, h: 7, holes: [[1, 3]] },
+  // 8x4−2 = 30（中央の 2x2 のうち、ナナメに並んだ 2 点。どちらのナナメでもよい）
+  { w: 8, h: 4, holes: [[3, 1], [4, 2]] },
+  { w: 8, h: 4, holes: [[4, 1], [3, 2]] },
+  { w: 4, h: 8, holes: [[1, 3], [2, 4]] },
+  { w: 4, h: 8, holes: [[2, 3], [1, 4]] },
   // 7x6−2 = 40
   { w: 7, h: 6, holes: [[3, 2], [3, 3]] },
   { w: 6, h: 7, holes: [[2, 3], [3, 3]] },
@@ -88,8 +93,9 @@ function classifyShape(board: Board, points: number[], color: Color, rules: Shap
     return { kind: "invalid", size, reason: `${w}x${h} の矩形は 10 の倍数でない` };
   }
 
-  const pattern = HOLE_PATTERNS.find((p) => p.w === w && p.h === h);
-  if (pattern && sameHoles(pattern.holes, holes)) {
+  // 同じ大きさで内側の石の置き方が複数ある形（8x4−2 のナナメ）もあるので、一致するものを探す
+  const pattern = HOLE_PATTERNS.find((p) => p.w === w && p.h === h && sameHoles(p.holes, holes));
+  if (pattern) {
     const allStones = holes.every(([x, y]) => {
       const i = board.index(minX + x, minY + y);
       return board.cells[i] === color && board.isLiveStone(i);
